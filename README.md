@@ -27,6 +27,3 @@ This is a monorepo for the Jigger AI project, a cocktail inventory and recommend
 - `server/`: Backend API and AI agent logic.
 - `docker-compose.yml`: Local development environment configuration.
 
-## License
-
-ISC
