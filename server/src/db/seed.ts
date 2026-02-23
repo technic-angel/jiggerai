@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { db } from './index.js';
 import { users, inventory, recipes, userFavorites } from './schema.js';
 import { v4 as uuidv4 } from 'uuid';

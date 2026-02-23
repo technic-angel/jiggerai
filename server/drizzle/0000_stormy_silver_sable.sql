@@ -1,6 +1,6 @@
 CREATE TABLE "inventory" (
 	"id" serial PRIMARY KEY NOT NULL,
-	"user_id" uuid NOT NULL,
+	"user_id" text NOT NULL,
 	"spirit_name" text NOT NULL,
 	"category" text NOT NULL,
 	"volume_eighths" integer DEFAULT 8 NOT NULL,
@@ -20,13 +20,13 @@ CREATE TABLE "recipes" (
 --> statement-breakpoint
 CREATE TABLE "user_favorites" (
 	"id" serial PRIMARY KEY NOT NULL,
-	"user_id" uuid NOT NULL,
+	"user_id" text NOT NULL,
 	"recipe_id" integer NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "users" (
-	"id" uuid PRIMARY KEY NOT NULL,
+	"id" text PRIMARY KEY NOT NULL,
 	"email" text NOT NULL,
 	"display_name" text NOT NULL,
 	"taste_embedding" vector(768),
