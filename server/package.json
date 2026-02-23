@@ -7,6 +7,7 @@
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "lint": "eslint .",
+    "seed": "tsx src/db/seed.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -20,7 +21,7 @@
     "dotenv": "^17.3.1",
     "drizzle-orm": "^0.45.1",
     "express": "^5.2.1",
-    "postgres": "^3.4.8",
+    "pg": "^8.18.0",
     "uuid": "^13.0.0"
   },
   "devDependencies": {
