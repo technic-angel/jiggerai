@@ -7,9 +7,12 @@ services:
       - "5000:5000"
     environment:
       - NODE_ENV=development
+      - DATABASE_URL=postgres://postgres:password@db:5432/jigger_ai
     volumes:
       - ./server:/app
       - /app/node_modules
+    depends_on:
+      - db
 
   client:
     build: ./client
@@ -24,3 +27,17 @@ services:
     tty: true
     depends_on:
       - server
+
+  db:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: jigger_ai
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+volumes:
+  db-data:
