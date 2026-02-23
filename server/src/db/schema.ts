@@ -44,6 +44,29 @@ export const inventory = pgTable('inventory', {
   
   // For the PricingAgent to track the value of the home bar
   purchasePrice: numeric('purchase_price', { precision: 10, scale: 2 }), 
+
+  // Flavor profile numeric attributes (0.00 - 1.00 scale suggested)
+  // Flavor profile numeric attributes (0.00 - 1.00 scale suggested)
+  // Flavor profile numeric attributes (0.00 - 1.00 scale suggested)
+  // These fields are optional; the migration `0001_add_flavor_profiles.sql`
+  // creates the columns in the database. They are kept here so Drizzle has
+  // the correct types available for inserts/queries when you migrate.
+  flavor_sweetness: numeric('flavor_sweetness', { precision: 3, scale: 2 }),
+  flavor_bitterness: numeric('flavor_bitterness', { precision: 3, scale: 2 }),
+  flavor_sourness: numeric('flavor_sourness', { precision: 3, scale: 2 }),
+  flavor_body: numeric('flavor_body', { precision: 3, scale: 2 }),
+
+  // A vector embedding representation of the spirit's flavor/profile
+  flavorEmbedding: vector('flavor_embedding', { dimensions: 768 }),
+
+  // Number of unopened full bottles of this spirit (0-99)
+  // Keeps the model simple: one open bottle tracked by `volumeEighths` plus
+  // a count of unopened bottles available in reserve.
+  unopenedCount: integer('unopened_count').notNull().default(0),
+
+  // Optional FK to a canonical ingredient entry. Nullable to allow gradual migration
+  // from free-text `spiritName` to structured `ingredients` table.
+  ingredientId: integer('ingredient_id'),
   
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -63,11 +86,50 @@ export const recipes = pgTable(
     
     // The vector representation of the drink's flavor
     embedding: vector('embedding', { dimensions: 768 }),
+
+    // Optional numeric flavor profile attributes (0.00 - 1.00 scale suggested)
+    // These fields are optional and match the migration added to the DB. They
+    // allow the Mixologist and Inventory agents to store per-item flavor
+    // attributes and a dedicated flavor vector for nearest-neighbor searches.
+    flavor_sweetness: numeric('flavor_sweetness', { precision: 3, scale: 2 }),
+    flavor_bitterness: numeric('flavor_bitterness', { precision: 3, scale: 2 }),
+    flavor_sourness: numeric('flavor_sourness', { precision: 3, scale: 2 }),
+    flavor_body: numeric('flavor_body', { precision: 3, scale: 2 }),
+
+    // Flavor embedding separate from any generic embedding field
+    flavorEmbedding: vector('flavor_embedding', { dimensions: 768 }),
   },
   (table) => [
     index('recipeEmbeddingIndex').using('hnsw', table.embedding.op('vector_cosine_ops')),
   ]
 );
+
+// ==========================================
+// INGREDIENTS (Canonical ingredient records)
+// ==========================================
+export const ingredients = pgTable('ingredients', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  type: text('type').notNull(), // e.g., 'spirit', 'mixer', 'garnish', 'sweetener'
+  unit: text('unit'),
+  defaultVolumeMl: numeric('default_volume_ml', { precision: 8, scale: 2 }),
+  perishable: integer('perishable').default(0),
+  category: text('category'),
+  flavorEmbedding: vector('flavor_embedding', { dimensions: 768 }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// ==========================================
+// RECIPE_INGREDIENTS (Join table)
+// ==========================================
+export const recipeIngredients = pgTable('recipe_ingredients', {
+  id: serial('id').primaryKey(),
+  recipeId: integer('recipe_id').references(() => recipes.id, { onDelete: 'cascade' }).notNull(),
+  ingredientId: integer('ingredient_id').references(() => ingredients.id, { onDelete: 'restrict' }).notNull(),
+  amountText: text('amount_text'),
+  amountMl: numeric('amount_ml', { precision: 8, scale: 2 }),
+  position: integer('position').default(0),
+});
 
 // ==========================================
 // 4. USER FAVORITES (The Training Data)
@@ -108,4 +170,16 @@ export const usersRelations = relations(users, ({ many }) => ({
   inventory: many(inventory),
   favorites: many(userFavorites),
   shoppingList: many(shoppingList),
+}));
+
+export const ingredientsRelations = relations(ingredients, ({ many }) => ({
+  recipeReferences: many(recipeIngredients),
+}));
+
+export const recipesRelations = relations(recipes, ({ many }) => ({
+  ingredients: many(recipeIngredients),
+}));
+
+export const inventoryRelations = relations(inventory, ({ one }) => ({
+  ingredient: one(ingredients, { fields: [inventory.ingredientId], references: [ingredients.id] }),
 }));
