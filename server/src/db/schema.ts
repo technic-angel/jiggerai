@@ -86,9 +86,26 @@ export const userFavorites = pgTable('user_favorites', {
 });
 
 // ==========================================
+// 5. SHOPPING LIST (What the User Needs)
+// ==========================================
+export const shoppingList = pgTable('shopping_list', {
+  id: serial('id').primaryKey(),
+  userId: text('user_id')
+    .references(() => users.id, { onDelete: 'cascade' })
+    .notNull(),
+  
+  itemName: text('item_name').notNull(), // e.g., "Tequila"
+  quantity: integer('quantity').default(1).notNull(),
+  isPurchased: integer('is_purchased').default(0).notNull(), // 0 = false, 1 = true (using integer for simplicity)
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// ==========================================
 // RELATIONS (For clean type-safe queries)
 // ==========================================
 export const usersRelations = relations(users, ({ many }) => ({
   inventory: many(inventory),
   favorites: many(userFavorites),
+  shoppingList: many(shoppingList),
 }));
