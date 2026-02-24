@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { db } from './db/index.js';
-import { users, inventory, recipes, shoppingList, ingredients, recipeIngredients } from './db/schema.js';
+import { users, inventory, recipes, shoppingList, ingredients, recipeIngredients, userFavorites, recipeSteps, recipeVariants } from './db/schema.js';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 
@@ -23,6 +23,7 @@ const createInventorySchema = z.object({
   volumeEighths: z.number().int().min(0).max(8).optional(),
   purchasePrice: z.union([z.number(), z.string()]).optional(),
   unopenedCount: z.number().int().min(0).max(99).optional(),
+  imageUrl: z.string().url().optional(),
 });
 
 const patchInventorySchema = z.object({
@@ -36,6 +37,7 @@ const patchInventorySchema = z.object({
   openVolumeEighths: z.number().int().min(0).max(8).optional(),
   purchasePrice: z.union([z.number(), z.string()]).nullable().optional(),
   userId: z.string().optional(),
+  imageUrl: z.string().url().nullable().optional(),
 });
 
 const createRecipeSchema = z.object({
@@ -45,6 +47,29 @@ const createRecipeSchema = z.object({
   instructions: z.string().min(1),
   youtubeUrl: z.string().url().optional(),
   embedding: z.array(z.number()).optional(),
+  imageUrl: z.string().url().optional(),
+});
+
+// Zod: single recipe step (used inside the bulk-add array)
+const recipeStepSchema = z.object({
+  stepText: z.string().min(1),
+  position: z.number().int().min(0).optional(),
+  durationSeconds: z.number().int().min(0).optional(),
+  toolRequired: z.string().optional(),
+});
+
+// Zod: create a recipe variant (the "upgrade path")
+const createVariantSchema = z.object({
+  variantLabel: z.string().min(1),
+  variantNote: z.string().optional(),
+  ingredients: z.array(z.string()).min(1),
+  instructions: z.string().optional(),
+  imageUrl: z.string().url().optional(),
+  flavor_sweetness: z.number().min(0).max(1).optional(),
+  flavor_bitterness: z.number().min(0).max(1).optional(),
+  flavor_sourness: z.number().min(0).max(1).optional(),
+  flavor_body: z.number().min(0).max(1).optional(),
+  flavorEmbedding: z.array(z.number()).optional(),
 });
 
 // Health
@@ -83,6 +108,7 @@ app.post('/api/inventory', async (req, res) => {
       volumeEighths: typeof parsed.volumeEighths === 'number' ? parsed.volumeEighths : 8,
       purchasePrice: parsed.purchasePrice ? String(parsed.purchasePrice) : null,
       unopenedCount: typeof (req.body.unopenedCount) === 'number' ? Number(req.body.unopenedCount) : 0,
+      imageUrl: parsed.imageUrl || null,
     }).returning();
     res.status(201).json(newItem[0]);
   } catch (error) {
@@ -178,6 +204,50 @@ app.get('/api/recipes', async (req, res) => {
   }
 });
 
+// FAVORITES
+app.get('/api/users/:id/favorites', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const favs = await db.select().from(userFavorites).where(eq(userFavorites.userId, id));
+    const recipeIds = favs.map((f: any) => f.recipeId);
+    if (recipeIds.length === 0) return res.json([]);
+    const rows = await db.select().from(recipes).where(sql`id = ANY(${recipeIds})`);
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching favorites:', error);
+    res.status(500).json({ error: 'Failed to fetch favorites' });
+  }
+});
+
+app.post('/api/favorites', async (req, res) => {
+  try {
+    const { userId, recipeId } = req.body || {};
+    if (!userId || !recipeId) return res.status(400).json({ error: 'userId and recipeId required' });
+    const [row] = await db.insert(userFavorites).values({ userId, recipeId }).returning();
+    res.status(201).json(row);
+  } catch (error) {
+    console.error('Error creating favorite:', error);
+    res.status(500).json({ error: 'Failed to create favorite' });
+  }
+});
+
+app.delete('/api/favorites', async (req, res) => {
+  try {
+     // Prefer a non-empty `req.body`, fall back to non-empty `req.query`, else {}
+     let source: any = undefined;
+     if (req.body && Object.keys(req.body).length > 0) source = req.body;
+     else if (req.query && Object.keys(req.query).length > 0) source = req.query;
+     else source = {};
+     const { userId, recipeId } = source;
+    if (!userId || !recipeId) return res.status(400).json({ error: 'userId and recipeId required' });
+    await db.delete(userFavorites).where(eq(userFavorites.userId, userId)).where(eq(userFavorites.recipeId, Number(recipeId)));
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error deleting favorite:', error);
+    res.status(500).json({ error: 'Failed to delete favorite' });
+  }
+});
+
 app.post('/api/recipes', async (req, res) => {
   try {
     const parsed = await createRecipeSchema.parseAsync(req.body);
@@ -187,6 +257,7 @@ app.post('/api/recipes', async (req, res) => {
       ingredients: parsed.ingredients,
       instructions: parsed.instructions,
       youtubeUrl: parsed.youtubeUrl || null,
+      imageUrl: parsed.imageUrl || null,
     };
     if (Array.isArray(parsed.embedding) && parsed.embedding.length > 0) insertObj.embedding = parsed.embedding as any;
     const [newRecipe] = await db.insert(recipes).values(insertObj).returning();
@@ -307,3 +378,186 @@ app.get('/api/ingredients/search', async (req, res) => {
 });
 
 export { app };
+
+// ===========================================================================
+// RECIPE STEPS — cached ordered instructions
+// ===========================================================================
+
+// GET: all base steps for a recipe (variantId IS NULL)
+app.get('/api/recipes/:id/steps', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const rows = await db.select().from(recipeSteps)
+      .where(sql`${recipeSteps.recipeId} = ${Number(id)} AND ${recipeSteps.variantId} IS NULL`)
+      .orderBy(sql`${recipeSteps.position} ASC`);
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching recipe steps:', error);
+    res.status(500).json({ error: 'Failed to fetch recipe steps' });
+  }
+});
+
+// POST: bulk-add steps for a recipe (MixologistAgent caches them after a fetch)
+// Body: { steps: [{stepText, position?, durationSeconds?, toolRequired?}] }
+app.post('/api/recipes/:id/steps', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { steps } = req.body || {};
+    if (!Array.isArray(steps) || steps.length === 0) {
+      return res.status(400).json({ error: 'Body must include a non-empty `steps` array' });
+    }
+    const parsed = z.array(recipeStepSchema).safeParse(steps);
+    if (!parsed.success) return res.status(400).json({ error: 'Validation failed', issues: parsed.error.errors });
+    const rows = await db.insert(recipeSteps).values(
+      parsed.data.map((s, i) => ({
+        recipeId: Number(id),
+        variantId: null,
+        position: typeof s.position === 'number' ? s.position : i,
+        stepText: s.stepText,
+        durationSeconds: s.durationSeconds ?? null,
+        toolRequired: s.toolRequired ?? null,
+      }))
+    ).returning();
+    res.status(201).json(rows);
+  } catch (error) {
+    console.error('Error saving recipe steps:', error);
+    res.status(500).json({ error: 'Failed to save recipe steps' });
+  }
+});
+
+// ===========================================================================
+// RECIPE VARIANTS — upgrade paths per base recipe
+// ===========================================================================
+
+// GET: all variants for a recipe (optionally include their steps)
+app.get('/api/recipes/:id/variants', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const variants = await db.select().from(recipeVariants)
+      .where(eq(recipeVariants.baseRecipeId, Number(id)));
+    if (req.query.includeSteps === 'true' && variants.length > 0) {
+      const variantIds = variants.map((v: any) => v.id);
+      const steps = await db.select().from(recipeSteps)
+        .where(sql`${recipeSteps.variantId} = ANY(${variantIds})`)
+        .orderBy(sql`${recipeSteps.position} ASC`);
+      const stepsByVariant: Record<number, any[]> = {};
+      steps.forEach((s: any) => {
+        if (!stepsByVariant[s.variantId]) stepsByVariant[s.variantId] = [];
+        stepsByVariant[s.variantId].push(s);
+      });
+      return res.json(variants.map((v: any) => ({ ...v, steps: stepsByVariant[v.id] || [] })));
+    }
+    res.json(variants);
+  } catch (error) {
+    console.error('Error fetching recipe variants:', error);
+    res.status(500).json({ error: 'Failed to fetch recipe variants' });
+  }
+});
+
+// POST: create a new upgrade variant for a base recipe
+app.post('/api/recipes/:id/variants', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const parsed = await createVariantSchema.safeParseAsync(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: 'Validation failed', issues: parsed.error.errors });
+    const d = parsed.data;
+    const insertObj: any = {
+      baseRecipeId: Number(id),
+      variantLabel: d.variantLabel,
+      variantNote: d.variantNote ?? null,
+      ingredients: d.ingredients,
+      instructions: d.instructions ?? null,
+      imageUrl: d.imageUrl ?? null,
+      flavor_sweetness: d.flavor_sweetness ?? null,
+      flavor_bitterness: d.flavor_bitterness ?? null,
+      flavor_sourness: d.flavor_sourness ?? null,
+      flavor_body: d.flavor_body ?? null,
+    };
+    if (Array.isArray(d.flavorEmbedding) && d.flavorEmbedding.length > 0) {
+      insertObj.flavorEmbedding = d.flavorEmbedding as any;
+    }
+    const [row] = await db.insert(recipeVariants).values(insertObj).returning();
+    res.status(201).json(row);
+  } catch (error) {
+    console.error('Error creating recipe variant:', error);
+    res.status(500).json({ error: 'Failed to create recipe variant' });
+  }
+});
+
+// GET: steps for a specific variant
+app.get('/api/recipes/variants/:variantId/steps', async (req, res) => {
+  try {
+    const { variantId } = req.params;
+    const rows = await db.select().from(recipeSteps)
+      .where(eq(recipeSteps.variantId, Number(variantId)))
+      .orderBy(sql`${recipeSteps.position} ASC`);
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching variant steps:', error);
+    res.status(500).json({ error: 'Failed to fetch variant steps' });
+  }
+});
+
+// POST: bulk-add steps for a specific variant
+app.post('/api/recipes/variants/:variantId/steps', async (req, res) => {
+  try {
+    const { variantId } = req.params;
+    const { steps } = req.body || {};
+    if (!Array.isArray(steps) || steps.length === 0) {
+      return res.status(400).json({ error: 'Body must include a non-empty `steps` array' });
+    }
+    const parsed = z.array(recipeStepSchema).safeParse(steps);
+    if (!parsed.success) return res.status(400).json({ error: 'Validation failed', issues: parsed.error.errors });
+    // Resolve the recipeId from the variant row
+    const variantRows = await db.select().from(recipeVariants).where(eq(recipeVariants.id, Number(variantId)));
+    if (!variantRows || variantRows.length === 0) return res.status(404).json({ error: 'Variant not found' });
+    const recipeId = (variantRows[0] as any).baseRecipeId;
+    const rows = await db.insert(recipeSteps).values(
+      parsed.data.map((s, i) => ({
+        recipeId,
+        variantId: Number(variantId),
+        position: typeof s.position === 'number' ? s.position : i,
+        stepText: s.stepText,
+        durationSeconds: s.durationSeconds ?? null,
+        toolRequired: s.toolRequired ?? null,
+      }))
+    ).returning();
+    res.status(201).json(rows);
+  } catch (error) {
+    console.error('Error saving variant steps:', error);
+    res.status(500).json({ error: 'Failed to save variant steps' });
+  }
+});
+
+// GET: full recipe — base + steps + variants + variant steps (zero agent calls needed)
+app.get('/api/recipes/:id/full', async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Fetch base recipe, its steps, and its variants in parallel
+    const [baseRows, baseSteps, variants] = await Promise.all([
+      db.select().from(recipes).where(eq(recipes.id, Number(id))),
+      db.select().from(recipeSteps)
+        .where(sql`${recipeSteps.recipeId} = ${Number(id)} AND ${recipeSteps.variantId} IS NULL`)
+        .orderBy(sql`${recipeSteps.position} ASC`),
+      db.select().from(recipeVariants).where(eq(recipeVariants.baseRecipeId, Number(id))),
+    ]);
+    if (!baseRows || baseRows.length === 0) return res.status(404).json({ error: 'Recipe not found' });
+    let variantsWithSteps: any[] = variants;
+    if (variants.length > 0) {
+      const variantIds = variants.map((v: any) => v.id);
+      const variantSteps = await db.select().from(recipeSteps)
+        .where(sql`${recipeSteps.variantId} = ANY(${variantIds})`)
+        .orderBy(sql`${recipeSteps.position} ASC`);
+      const stepsByVariant: Record<number, any[]> = {};
+      variantSteps.forEach((s: any) => {
+        if (!stepsByVariant[s.variantId]) stepsByVariant[s.variantId] = [];
+        stepsByVariant[s.variantId].push(s);
+      });
+      variantsWithSteps = variants.map((v: any) => ({ ...v, steps: stepsByVariant[v.id] || [] }));
+    }
+    res.json({ ...baseRows[0], steps: baseSteps, variants: variantsWithSteps });
+  } catch (error) {
+    console.error('Error fetching full recipe:', error);
+    res.status(500).json({ error: 'Failed to fetch full recipe' });
+  }
+});
