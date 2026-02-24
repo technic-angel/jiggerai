@@ -67,6 +67,8 @@ export const inventory = pgTable('inventory', {
   // Optional FK to a canonical ingredient entry. Nullable to allow gradual migration
   // from free-text `spiritName` to structured `ingredients` table.
   ingredientId: integer('ingredient_id'),
+  // Optional image URL for the bottle label or photo (public URL)
+  imageUrl: text('image_url'),
   
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -98,6 +100,8 @@ export const recipes = pgTable(
 
     // Flavor embedding separate from any generic embedding field
     flavorEmbedding: vector('flavor_embedding', { dimensions: 768 }),
+    // Optional public image URL for the recipe (e.g., finished cocktail photo)
+    imageUrl: text('image_url'),
   },
   (table) => [
     index('recipeEmbeddingIndex').using('hnsw', table.embedding.op('vector_cosine_ops')),
@@ -129,6 +133,63 @@ export const recipeIngredients = pgTable('recipe_ingredients', {
   amountText: text('amount_text'),
   amountMl: numeric('amount_ml', { precision: 8, scale: 2 }),
   position: integer('position').default(0),
+});
+
+// ==========================================
+// RECIPE STEPS (Cached ordered instructions)
+// ==========================================
+// Written once by the MixologistAgent on a cache miss; read many times after.
+// Belongs to a base recipe (variantId = null) or a specific variant.
+export const recipeSteps = pgTable('recipe_steps', {
+  id: serial('id').primaryKey(),
+  recipeId: integer('recipe_id')
+    .references(() => recipes.id, { onDelete: 'cascade' })
+    .notNull(),
+  // Null = step belongs to the base recipe; set = step belongs to a variant
+  variantId: integer('variant_id'),
+  position: integer('position').notNull().default(0),
+  stepText: text('step_text').notNull(),
+  // Optional helper metadata so the UI can show timing / equipment tips
+  durationSeconds: integer('duration_seconds'),
+  toolRequired: text('tool_required'), // e.g. "cocktail shaker", "muddler"
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// ==========================================
+// RECIPE VARIANTS (Upgrade paths)
+// ==========================================
+// Lets the agent cache "same drink, better ingredients" without duplicating the
+// base recipe.  Example: standard Margarita (base) → Grand Marnier Upgrade
+// (variant).  Each variant can override the ingredient list, instructions, and
+// flavor profile so the frontend can show "you could make it this way instead".
+export const recipeVariants = pgTable('recipe_variants', {
+  id: serial('id').primaryKey(),
+  baseRecipeId: integer('base_recipe_id')
+    .references(() => recipes.id, { onDelete: 'cascade' })
+    .notNull(),
+
+  // Human-readable upgrade label shown in the UI
+  variantLabel: text('variant_label').notNull(), // e.g. "Grand Marnier Upgrade"
+  // Short description of what changed and why it matters
+  variantNote: text('variant_note'),            // e.g. "Richer orange flavour, smoother finish"
+
+  // Overriding ingredient list (mirrors recipes.ingredients — free-text array)
+  ingredients: text('ingredients').array().notNull(),
+  // Override instructions for this variant (null = reuse base recipe instructions)
+  instructions: text('instructions'),
+  // Optional image for the upgraded version
+  imageUrl: text('image_url'),
+
+  // Flavor profile for this specific variant so the agent can do NN searches
+  // without regenerating the embedding on every request.
+  flavor_sweetness: numeric('flavor_sweetness', { precision: 3, scale: 2 }),
+  flavor_bitterness: numeric('flavor_bitterness', { precision: 3, scale: 2 }),
+  flavor_sourness: numeric('flavor_sourness', { precision: 3, scale: 2 }),
+  flavor_body: numeric('flavor_body', { precision: 3, scale: 2 }),
+  flavorEmbedding: vector('flavor_embedding', { dimensions: 768 }),
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
 // ==========================================
@@ -178,6 +239,18 @@ export const ingredientsRelations = relations(ingredients, ({ many }) => ({
 
 export const recipesRelations = relations(recipes, ({ many }) => ({
   ingredients: many(recipeIngredients),
+  steps: many(recipeSteps),
+  variants: many(recipeVariants),
+}));
+
+export const recipeVariantsRelations = relations(recipeVariants, ({ one, many }) => ({
+  baseRecipe: one(recipes, { fields: [recipeVariants.baseRecipeId], references: [recipes.id] }),
+  steps: many(recipeSteps),
+}));
+
+export const recipeStepsRelations = relations(recipeSteps, ({ one }) => ({
+  recipe: one(recipes, { fields: [recipeSteps.recipeId], references: [recipes.id] }),
+  variant: one(recipeVariants, { fields: [recipeSteps.variantId], references: [recipeVariants.id] }),
 }));
 
 export const inventoryRelations = relations(inventory, ({ one }) => ({

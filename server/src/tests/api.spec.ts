@@ -38,6 +38,9 @@ vi.mock('../db/schema.js', () => ({
   shoppingList: {},
   ingredients: { id: 'id', name: 'name', type: 'type', category: 'category' },
   recipeIngredients: { recipeId: 'recipeId' },
+  userFavorites: { userId: 'userId', recipeId: 'recipeId' },
+  recipeSteps: { id: 'id', recipeId: 'recipeId', variantId: 'variantId', position: 'position' },
+  recipeVariants: { id: 'id', baseRecipeId: 'baseRecipeId' },
 }));
 
 // ---------------------------------------------------------------------------
@@ -62,7 +65,7 @@ const mockExecute = db.execute as Mock;
  */
 function makeChain(result: unknown) {
   const c: Record<string, unknown> = {};
-  for (const m of ['from', 'where', 'limit', 'set', 'values']) {
+  for (const m of ['from', 'where', 'limit', 'set', 'values', 'orderBy']) {
     c[m] = () => c;
   }
   c.returning = () => Promise.resolve(Array.isArray(result) ? result : [result]);
@@ -732,6 +735,393 @@ describe('GET /api/ingredients/search', () => {
   it('500 – db error', async () => {
     mockExecute.mockImplementationOnce(() => { throw new Error('DB down'); });
     const res = await request(app).get('/api/ingredients/search?q=gin');
+    expect(res.status).toBe(500);
+  });
+});
+
+// ===========================================================================
+// Image URL handling (inventory + recipes) and FAVORITES endpoints
+// ===========================================================================
+describe('Image URLs and FAVORITES', () => {
+  it('POST /api/inventory accepts imageUrl and returns it', async () => {
+    mockInsert.mockReturnValueOnce(makeChain([{ ...INV_ITEM, imageUrl: 'https://example.com/img.jpg' }]));
+    const res = await request(app).post('/api/inventory').send({
+      userId: 'user-1', spiritName: 'Hendricks Gin', category: 'Gin', imageUrl: 'https://example.com/img.jpg',
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.imageUrl).toBe('https://example.com/img.jpg');
+  });
+
+  it('POST /api/recipes accepts imageUrl and returns it', async () => {
+    mockInsert.mockReturnValueOnce(makeChain([{ ...RECIPE, imageUrl: 'https://example.com/recipe.jpg' }]));
+    const res = await request(app).post('/api/recipes').send({
+      name: 'Negroni', category: 'Cocktail', ingredients: ['Gin', 'Campari'], instructions: 'Stir', imageUrl: 'https://example.com/recipe.jpg',
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.imageUrl).toBe('https://example.com/recipe.jpg');
+  });
+
+  it('GET /api/users/:id/favorites returns empty array when none', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([]));
+    const res = await request(app).get('/api/users/user-1/favorites');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('GET /api/users/:id/favorites returns recipes when present', async () => {
+    mockSelect
+      .mockReturnValueOnce(makeChain([{ recipeId: 1 }]))
+      .mockReturnValueOnce(makeChain([RECIPE]));
+    const res = await request(app).get('/api/users/user-1/favorites');
+    expect(res.status).toBe(200);
+    expect(res.body[0].name).toBe('Negroni');
+  });
+
+  it('GET /api/users/:id/favorites 500 db error', async () => {
+    mockSelect.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app).get('/api/users/user-1/favorites');
+    expect(res.status).toBe(500);
+  });
+
+  it('POST /api/favorites creates favorite', async () => {
+    mockInsert.mockReturnValueOnce(makeChain([{ userId: 'user-1', recipeId: 1 }]));
+    const res = await request(app).post('/api/favorites').send({ userId: 'user-1', recipeId: 1 });
+    expect(res.status).toBe(201);
+  });
+
+  it('POST /api/favorites 400 missing params', async () => {
+    const res = await request(app).post('/api/favorites').send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/favorites 400 with non-JSON body (req.body || {} fallback)', async () => {
+    const res = await request(app)
+      .post('/api/favorites')
+      .set('Content-Type', 'text/plain')
+      .send('');
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/favorites 500 db error', async () => {
+    mockInsert.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app).post('/api/favorites').send({ userId: 'user-1', recipeId: 1 });
+    expect(res.status).toBe(500);
+  });
+
+  it('DELETE /api/favorites deletes favorite via body', async () => {
+    mockDelete.mockReturnValueOnce(makeChain(undefined));
+    const res = await request(app).delete('/api/favorites').send({ userId: 'user-1', recipeId: 1 });
+    expect(res.status).toBe(204);
+  });
+
+  it('DELETE /api/favorites deletes favorite via query when body parser skipped', async () => {
+    mockDelete.mockReturnValueOnce(makeChain(undefined));
+    const res = await request(app)
+      .delete('/api/favorites?userId=user-1&recipeId=1')
+      .set('Content-Type', 'text/plain')
+      .send('');
+    expect(res.status).toBe(204);
+  });
+
+  it('DELETE /api/favorites 400 missing params', async () => {
+    const res = await request(app).delete('/api/favorites').send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('DELETE /api/favorites 400 when body parser skipped and no query', async () => {
+    const res = await request(app)
+      .delete('/api/favorites')
+      .set('Content-Type', 'text/plain')
+      .send('');
+    expect(res.status).toBe(400);
+  });
+
+  it('DELETE /api/favorites 500 db error', async () => {
+    mockDelete.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app).delete('/api/favorites').send({ userId: 'user-1', recipeId: 1 });
+    expect(res.status).toBe(500);
+  });
+});
+
+// ===========================================================================
+// RECIPE STEPS  GET/POST /api/recipes/:id/steps
+// ===========================================================================
+const STEP = { id: 1, recipeId: 1, variantId: null, position: 0, stepText: 'Shake well', durationSeconds: 30, toolRequired: 'shaker' };
+const VARIANT = { id: 1, baseRecipeId: 1, variantLabel: 'Grand Marnier Upgrade', variantNote: 'Premium', ingredients: ['Grand Marnier'], instructions: 'Stir', imageUrl: null };
+
+describe('RECIPE STEPS', () => {
+  it('GET /api/recipes/:id/steps returns steps', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([STEP]));
+    const res = await request(app).get('/api/recipes/1/steps');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('GET /api/recipes/:id/steps 500 db error', async () => {
+    mockSelect.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app).get('/api/recipes/1/steps');
+    expect(res.status).toBe(500);
+  });
+
+  it('POST /api/recipes/:id/steps creates steps', async () => {
+    mockInsert.mockReturnValueOnce(makeChain([STEP]));
+    const res = await request(app)
+      .post('/api/recipes/1/steps')
+      .send({ steps: [{ stepText: 'Shake well', position: 0, durationSeconds: 30, toolRequired: 'shaker' }] });
+    expect(res.status).toBe(201);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('POST /api/recipes/:id/steps 400 missing steps array', async () => {
+    const res = await request(app).post('/api/recipes/1/steps').send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes/:id/steps 400 with non-JSON body (req.body || {} fallback)', async () => {
+    const res = await request(app)
+      .post('/api/recipes/1/steps')
+      .set('Content-Type', 'text/plain')
+      .send('');
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes/:id/steps 400 empty steps array', async () => {
+    const res = await request(app).post('/api/recipes/1/steps').send({ steps: [] });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes/:id/steps 400 validation failure', async () => {
+    const res = await request(app).post('/api/recipes/1/steps').send({ steps: [{ position: 0 }] });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes/:id/steps creates steps without position field (uses index fallback)', async () => {
+    mockInsert.mockReturnValueOnce(makeChain([STEP]));
+    const res = await request(app)
+      .post('/api/recipes/1/steps')
+      .send({ steps: [{ stepText: 'Shake well' }] }); // no position → triggers ternary false branch
+    expect(res.status).toBe(201);
+  });
+
+  it('POST /api/recipes/:id/steps 500 db error', async () => {
+    mockInsert.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app)
+      .post('/api/recipes/1/steps')
+      .send({ steps: [{ stepText: 'Shake well' }] });
+    expect(res.status).toBe(500);
+  });
+});
+
+// ===========================================================================
+// RECIPE VARIANTS  GET/POST /api/recipes/:id/variants
+// ===========================================================================
+describe('RECIPE VARIANTS', () => {
+  it('GET /api/recipes/:id/variants returns variants', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([VARIANT]));
+    const res = await request(app).get('/api/recipes/1/variants');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('GET /api/recipes/:id/variants with includeSteps=true and no variants returns []', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([]));
+    const res = await request(app).get('/api/recipes/1/variants?includeSteps=true');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it('GET /api/recipes/:id/variants with includeSteps=true fetches steps', async () => {
+    mockSelect
+      .mockReturnValueOnce(makeChain([VARIANT]))
+      .mockReturnValueOnce(makeChain([{ ...STEP, variantId: 1 }]));
+    const res = await request(app).get('/api/recipes/1/variants?includeSteps=true');
+    expect(res.status).toBe(200);
+    expect(res.body[0].steps).toBeDefined();
+  });
+
+  it('GET /api/recipes/:id/variants with includeSteps=true and variant has no steps ([] fallback)', async () => {
+    mockSelect
+      .mockReturnValueOnce(makeChain([VARIANT]))  // variants non-empty → enters includeSteps block
+      .mockReturnValueOnce(makeChain([]));        // steps select returns empty → stepsByVariant[v.id] undefined → []
+    const res = await request(app).get('/api/recipes/1/variants?includeSteps=true');
+    expect(res.status).toBe(200);
+    expect(res.body[0].steps).toEqual([]);
+  });
+
+  it('POST /api/recipes/:id/variants 400 with non-JSON body (req.body || {} fallback)', async () => {
+    const res = await request(app)
+      .post('/api/recipes/1/variants')
+      .set('Content-Type', 'text/plain')
+      .send(''); // body will be undefined → req.body || {}
+    expect(res.status).toBe(400);
+  });
+
+  it('GET /api/recipes/:id/variants 500 db error', async () => {
+    mockSelect.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app).get('/api/recipes/1/variants');
+    expect(res.status).toBe(500);
+  });
+
+  it('POST /api/recipes/:id/variants creates variant', async () => {
+    mockInsert.mockReturnValueOnce(makeChain([VARIANT]));
+    const res = await request(app)
+      .post('/api/recipes/1/variants')
+      .send({ variantLabel: 'Grand Marnier Upgrade', ingredients: ['Grand Marnier'] });
+    expect(res.status).toBe(201);
+  });
+
+  it('POST /api/recipes/:id/variants with all optional fields', async () => {
+    mockInsert.mockReturnValueOnce(makeChain([VARIANT]));
+    const res = await request(app)
+      .post('/api/recipes/1/variants')
+      .send({
+        variantLabel: 'Premium', variantNote: 'nice', ingredients: ['Whiskey'],
+        instructions: 'Stir', imageUrl: 'http://img.com/v.jpg',
+        flavor_sweetness: 0.5, flavor_bitterness: 0.3, flavor_sourness: 0.2, flavor_body: 0.4,
+        flavorEmbedding: [0.1, 0.2, 0.3],
+      });
+    expect(res.status).toBe(201);
+  });
+
+  it('POST /api/recipes/:id/variants 400 validation failure', async () => {
+    const res = await request(app).post('/api/recipes/1/variants').send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes/:id/variants 500 db error', async () => {
+    mockInsert.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app)
+      .post('/api/recipes/1/variants')
+      .send({ variantLabel: 'Grand Marnier Upgrade', ingredients: ['Grand Marnier'] });
+    expect(res.status).toBe(500);
+  });
+});
+
+// ===========================================================================
+// VARIANT STEPS  GET/POST /api/recipes/variants/:variantId/steps
+// ===========================================================================
+describe('VARIANT STEPS', () => {
+  it('GET /api/recipes/variants/:variantId/steps returns steps', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([{ ...STEP, variantId: 1 }]));
+    const res = await request(app).get('/api/recipes/variants/1/steps');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('GET /api/recipes/variants/:variantId/steps 500 db error', async () => {
+    mockSelect.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app).get('/api/recipes/variants/1/steps');
+    expect(res.status).toBe(500);
+  });
+
+  it('POST /api/recipes/variants/:variantId/steps creates steps', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([VARIANT]));
+    mockInsert.mockReturnValueOnce(makeChain([{ ...STEP, variantId: 1 }]));
+    const res = await request(app)
+      .post('/api/recipes/variants/1/steps')
+      .send({ steps: [{ stepText: 'Stir for 30s', position: 0 }] });
+    expect(res.status).toBe(201);
+  });
+
+  it('POST /api/recipes/variants/:variantId/steps 404 variant not found', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([]));
+    const res = await request(app)
+      .post('/api/recipes/variants/99/steps')
+      .send({ steps: [{ stepText: 'Stir' }] });
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /api/recipes/variants/:variantId/steps 400 missing steps', async () => {
+    const res = await request(app).post('/api/recipes/variants/1/steps').send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes/variants/:variantId/steps 400 empty steps', async () => {
+    const res = await request(app).post('/api/recipes/variants/1/steps').send({ steps: [] });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes/variants/:variantId/steps 400 validation failure', async () => {
+    const res = await request(app).post('/api/recipes/variants/1/steps').send({ steps: [{ position: 0 }] });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes/variants/:variantId/steps with non-JSON body (req.body || {} fallback)', async () => {
+    const res = await request(app)
+      .post('/api/recipes/variants/1/steps')
+      .set('Content-Type', 'text/plain')
+      .send('');
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /api/recipes/variants/:variantId/steps creates steps without position (index fallback)', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([VARIANT]));
+    mockInsert.mockReturnValueOnce(makeChain([{ ...STEP, variantId: 1 }]));
+    const res = await request(app)
+      .post('/api/recipes/variants/1/steps')
+      .send({ steps: [{ stepText: 'Stir' }] }); // no position → triggers ternary false branch
+    expect(res.status).toBe(201);
+  });
+
+  it('POST /api/recipes/variants/:variantId/steps 500 db error', async () => {
+    mockSelect.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app)
+      .post('/api/recipes/variants/1/steps')
+      .send({ steps: [{ stepText: 'Stir' }] });
+    expect(res.status).toBe(500);
+  });
+});
+
+// ===========================================================================
+// FULL RECIPE  GET /api/recipes/:id/full
+// ===========================================================================
+describe('FULL RECIPE', () => {
+  it('GET /api/recipes/:id/full returns recipe with steps and variants', async () => {
+    mockSelect
+      .mockReturnValueOnce(makeChain([RECIPE]))
+      .mockReturnValueOnce(makeChain([STEP]))
+      .mockReturnValueOnce(makeChain([]));
+    const res = await request(app).get('/api/recipes/1/full');
+    expect(res.status).toBe(200);
+    expect(res.body.name).toBe('Negroni');
+    expect(Array.isArray(res.body.steps)).toBe(true);
+    expect(Array.isArray(res.body.variants)).toBe(true);
+  });
+
+  it('GET /api/recipes/:id/full fetches variant steps when variants exist', async () => {
+    mockSelect
+      .mockReturnValueOnce(makeChain([RECIPE]))
+      .mockReturnValueOnce(makeChain([STEP]))
+      .mockReturnValueOnce(makeChain([VARIANT]))
+      .mockReturnValueOnce(makeChain([{ ...STEP, variantId: 1 }]));
+    const res = await request(app).get('/api/recipes/1/full');
+    expect(res.status).toBe(200);
+    expect(res.body.variants[0].steps).toBeDefined();
+  });
+
+  it('GET /api/recipes/:id/full with variants but no variant steps ([] fallback)', async () => {
+    mockSelect
+      .mockReturnValueOnce(makeChain([RECIPE]))
+      .mockReturnValueOnce(makeChain([STEP]))
+      .mockReturnValueOnce(makeChain([VARIANT]))  // variants non-empty → fetches variant steps
+      .mockReturnValueOnce(makeChain([]));        // no variant steps → stepsByVariant[v.id] undefined → []
+    const res = await request(app).get('/api/recipes/1/full');
+    expect(res.status).toBe(200);
+    expect(res.body.variants[0].steps).toEqual([]);
+  });
+
+  it('GET /api/recipes/:id/full 404 recipe not found', async () => {
+    mockSelect
+      .mockReturnValueOnce(makeChain([]))
+      .mockReturnValueOnce(makeChain([]))
+      .mockReturnValueOnce(makeChain([]));
+    const res = await request(app).get('/api/recipes/99/full');
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /api/recipes/:id/full 500 db error', async () => {
+    mockSelect.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app).get('/api/recipes/1/full');
     expect(res.status).toBe(500);
   });
 });
