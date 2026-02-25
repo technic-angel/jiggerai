@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 140" height="140" width="100">
+  
+  <defs>
+    <linearGradient y2="100%" x2="100%" y1="0%" x1="0%" id="goldTop">
+      <stop stop-color="#FFD700" offset="0%"></stop>
+      <stop stop-color="#FEE9A0" offset="50%"></stop>
+      <stop stop-color="#DAA520" offset="100%"></stop>
+    </linearGradient>
+    <linearGradient y2="100%" x2="100%" y1="0%" x1="0%" id="goldBottom">
+      <stop stop-color="#DAA520" offset="0%"></stop>
+      <stop stop-color="#FEE9A0" offset="50%"></stop>
+      <stop stop-color="#B8860B" offset="100%"></stop>
+    </linearGradient>
+    <radialGradient r="80%" cy="20%" cx="30%" id="highlight">
+      <stop stop-opacity="0.7" stop-color="white" offset="0%"></stop>
+      <stop stop-opacity="0" stop-color="white" offset="100%"></stop>
+    </radialGradient>
+  </defs>
+
+  
+  <path stroke-width="1.5" stroke="#B8860B" fill="url(#goldTop)" d="M 20 10 
+           L 80 10 
+           L 65 70 
+           L 35 70 
+           Z"></path>
+
+  
+  <path stroke-width="1.5" stroke="#B8860B" fill="url(#goldBottom)" d="M 35 70 
+           L 65 70 
+           L 80 130 
+           L 20 130 
+           Z"></path>
+
+  
+  <rect stroke-width="1" stroke="#A67C00" fill="#C39953" rx="4" height="8" width="36" y="68" x="32"></rect>
+
+  
+  <path opacity="0.4" fill="url(#highlight)" d="M 25 15 
+           Q 50 0 75 15 
+           L 70 25 
+           Q 50 10 30 25 
+           Z"></path>
+
+  
+  <line opacity="0.6" stroke-width="1" stroke="#B8860B" y2="20" x2="75" y1="20" x1="25"></line>
+
+  
+  
+</svg>
