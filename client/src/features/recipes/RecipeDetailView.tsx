@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Heart, Share2 } from "lucide-react";
+import { ArrowLeft, Heart, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useUIStore } from "@/store/uiStore";
-import { SEED_RECIPES } from "./recipeSeed";
 import { SPIRIT_EMOJI } from "./recipeSeed";
+import { useRecipe, useMakeableRecipes, useDeleteRecipe, usePatchRecipe } from "@/hooks/useRecipes";
+import { useFavoriteIds, useToggleFavorite } from "@/hooks/useFavorites";
+import { StarRating } from "@/components/ui/StarRating";
 
 // ─── Recipe variant tile ──────────────────────────────────────────────────────
 
@@ -68,12 +70,27 @@ export function RecipeDetailView() {
   const clearPageContext = useUIStore((s) => s.clearPageContext);
 
   const recipeId = Number(id);
-  const recipe = SEED_RECIPES.find((r) => r.id === recipeId);
+  const { data: recipe, isLoading, isError } = useRecipe(recipeId);
+  const { data: makeableRecipes = [] } = useMakeableRecipes();
+  const favoriteIds = useFavoriteIds();
+  const toggleFavorite = useToggleFavorite();
 
-  const [isFavorite, setIsFavorite] = useState(recipe?.isFavorite ?? false);
+  const isFavorite = favoriteIds.has(recipeId);
+  const isMakeable = useMemo(
+    () => makeableRecipes.some((r) => r.id === recipeId),
+    [makeableRecipes, recipeId]
+  );
+
+  const deleteRecipe = useDeleteRecipe();
+  const patchRecipe = usePatchRecipe(recipeId);
 
   const variants = getVariants(recipeId);
   const instructions = recipe?.instructions.split(/\.\s+/).filter(Boolean) ?? [];
+
+  function handleDelete() {
+    if (!confirm(`Delete "${recipe?.name}"? This cannot be undone.`)) return;
+    deleteRecipe.mutate(recipeId, { onSuccess: () => navigate('/recipes') });
+  }
 
   useEffect(() => {
     if (!recipe) return;
@@ -81,12 +98,20 @@ export function RecipeDetailView() {
       type: "recipe",
       id: recipeId,
       name: recipe.name,
-      summary: `${recipe.name} — ${recipe.category} cocktail using ${recipe.baseSpirit}. ABV ~${recipe.abv}. Ingredients: ${recipe.ingredients.join(", ")}. Difficulty: ${recipe.difficulty}.`,
+      summary: `${recipe.name} — ${recipe.category} cocktail using ${recipe.baseSpirit ?? "unknown"}. ABV ~${recipe.abv ?? "?"}. Ingredients: ${recipe.ingredients.join(", ")}.`,
     });
     return () => clearPageContext();
-  }, [recipeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [recipeId, recipe?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!recipe) {
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-24 text-muted-foreground">
+        <span className="text-sm">Loading recipe…</span>
+      </div>
+    );
+  }
+
+  if (isError || !recipe) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
         <span className="text-4xl">🔍</span>
@@ -116,7 +141,7 @@ export function RecipeDetailView() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setIsFavorite((f) => !f)}
+            onClick={() => toggleFavorite.mutate({ recipeId, isFavorite })}
             className={cn(
               "gap-2",
               isFavorite ? "text-rose-400 hover:text-rose-300" : "text-muted-foreground hover:text-foreground"
@@ -125,8 +150,15 @@ export function RecipeDetailView() {
             <Heart className={cn("h-4 w-4", isFavorite && "fill-rose-400")} />
             {isFavorite ? "Favorited" : "Add to Favorites"}
           </Button>
-          <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
-            <Share2 className="h-4 w-4" />
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleDelete}
+            disabled={deleteRecipe.isPending}
+            className="text-muted-foreground hover:text-destructive"
+            title="Delete cocktail"
+          >
+            <Trash2 className="h-4 w-4" />
           </Button>
         </div>
       </div>
@@ -136,7 +168,7 @@ export function RecipeDetailView() {
         <div className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:gap-8">
           {/* Emoji / image placeholder */}
           <div className="flex h-40 w-40 shrink-0 items-center justify-center rounded-xl border border-border bg-background/50 text-7xl">
-            {SPIRIT_EMOJI[recipe.baseSpirit] ?? recipe.imageEmoji}
+            {(recipe.baseSpirit ? SPIRIT_EMOJI[recipe.baseSpirit] : null) ?? recipe.imageEmoji}
           </div>
           {/* Title block */}
           <div className="flex flex-col gap-3">
@@ -144,28 +176,28 @@ export function RecipeDetailView() {
               <h1 className="text-3xl font-bold text-foreground">{recipe.name}</h1>
               <p className="mt-1 text-sm text-muted-foreground">The classic {recipe.category.toLowerCase()} cocktail.</p>
             </div>
+            {/* Star rating */}
+            <div className="flex items-center gap-2">
+              <StarRating
+                value={recipe.rating ?? null}
+                onChange={(r) => patchRecipe.mutate({ rating: r })}
+              />
+              {recipe.rating && (
+                <span className="text-xs text-muted-foreground">{recipe.rating}/5</span>
+              )}
+            </div>
             {/* Meta badges */}
             <div className="flex flex-wrap gap-2">
               <span className="rounded-full border border-border bg-background px-3 py-1 text-xs font-medium text-muted-foreground">
-                {recipe.baseSpirit}
+                {recipe.baseSpirit ?? "—"}
               </span>
               <span className="rounded-full border border-border bg-background px-3 py-1 text-xs font-medium text-muted-foreground">
-                ~{recipe.abv} ABV
+                ~{recipe.abv ?? "?"} ABV
               </span>
               <span className="rounded-full border border-border bg-background px-3 py-1 text-xs font-medium text-muted-foreground">
-                {recipe.glassType} glass
+                {recipe.glassType ?? "—"} glass
               </span>
-              <span
-                className={cn(
-                  "rounded-full border px-3 py-1 text-xs font-medium",
-                  recipe.difficulty === "Easy"   && "border-teal-400/40  bg-teal-400/10  text-teal-300",
-                  recipe.difficulty === "Medium" && "border-amber-400/40 bg-amber-400/10 text-amber-300",
-                  recipe.difficulty === "Hard"   && "border-red-400/40   bg-red-400/10   text-red-300",
-                )}
-              >
-                {recipe.difficulty}
-              </span>
-              {recipe.isMakeable && (
+              {isMakeable && (
                 <span className="rounded-full border border-teal-400/40 bg-teal-400/10 px-3 py-1 text-xs font-medium text-teal-300">
                   ✓ You can make this
                 </span>
@@ -265,19 +297,15 @@ export function RecipeDetailView() {
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Base spirit</span>
-                <span className="text-foreground font-medium">{recipe.baseSpirit}</span>
+                <span className="text-foreground font-medium">{recipe.baseSpirit ?? "—"}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">ABV</span>
-                <span className="text-foreground font-medium">{recipe.abv}</span>
+                <span className="text-foreground font-medium">{recipe.abv ?? "—"}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Glass</span>
-                <span className="text-foreground font-medium">{recipe.glassType}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Difficulty</span>
-                <span className="text-foreground font-medium">{recipe.difficulty}</span>
+                <span className="text-foreground font-medium">{recipe.glassType ?? "—"}</span>
               </div>
             </div>
           </div>

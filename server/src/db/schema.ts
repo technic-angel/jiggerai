@@ -69,7 +69,13 @@ export const inventory = pgTable('inventory', {
   ingredientId: integer('ingredient_id'),
   // Optional image URL for the bottle label or photo (public URL)
   imageUrl: text('image_url'),
-  
+
+  // Whether the user has marked this bottle as a favourite
+  isFavorite: integer('is_favorite').notNull().default(0),
+
+  // User's personal 1-5 star rating for this bottle (null = unrated)
+  rating: integer('rating'),
+
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
@@ -102,6 +108,16 @@ export const recipes = pgTable(
     flavorEmbedding: vector('flavor_embedding', { dimensions: 768 }),
     // Optional public image URL for the recipe (e.g., finished cocktail photo)
     imageUrl: text('image_url'),
+
+    // Rich display fields for the frontend recipe cards
+    baseSpirit:  text('base_spirit'),
+    abv:         text('abv'),
+    glassType:   text('glass_type'),
+    difficulty:  text('difficulty'),
+    imageEmoji:  text('image_emoji'),
+
+    // User's personal 1-5 star rating for this cocktail (null = unrated)
+    rating: integer('rating'),
   },
   (table) => [
     index('recipeEmbeddingIndex').using('hnsw', table.embedding.op('vector_cosine_ops')),

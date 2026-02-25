@@ -1,7 +1,11 @@
-import { useState } from "react";
-import { Pencil, Save, X, Camera, Wine, Star, BookOpen } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Pencil, Save, X, Camera, Wine, Star, BookOpen, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useUser, usePatchUser } from "@/hooks/useUser";
+import { useInventory } from "@/hooks/useInventory";
+import { useFavorites } from "@/hooks/useFavorites";
+import { useRecipes } from "@/hooks/useRecipes";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -162,10 +166,24 @@ function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string
 // ─── Main view ────────────────────────────────────────────────────────────────
 
 export function ProfileView() {
+  const { data: user } = useUser();
+  const patchUser = usePatchUser();
+  const { data: inventory = [] } = useInventory();
+  const { data: favorites = [] } = useFavorites();
+  const { data: recipes = [] } = useRecipes();
+
   const [profile, setProfile] = useState<ProfileData>(INITIAL_PROFILE);
   const [draft, setDraft] = useState<ProfileData>(INITIAL_PROFILE);
   const [isEditing, setIsEditing] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  // Sync displayName and email from API user on load
+  useEffect(() => {
+    if (user) {
+      setProfile((p) => ({ ...p, displayName: user.displayName, email: user.email }));
+      setDraft((d) => ({ ...d, displayName: user.displayName, email: user.email }));
+    }
+  }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function setDraftField<K extends keyof ProfileData>(key: K, value: ProfileData[K]) {
     setDraft((d) => ({ ...d, [key]: value }));
@@ -183,11 +201,18 @@ export function ProfileView() {
   }
 
   function handleSave() {
-    // Phase B: PATCH /api/profile
-    setProfile({ ...draft });
-    setIsEditing(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+    patchUser.mutate(
+      { displayName: draft.displayName },
+      {
+        onSuccess: () => {
+          setProfile({ ...draft });
+          setIsEditing(false);
+          setSaved(true);
+          setTimeout(() => setSaved(false), 3000);
+        },
+        onError: () => {},
+      }
+    );
   }
 
   const data = isEditing ? draft : profile;
@@ -205,8 +230,8 @@ export function ProfileView() {
                 <X className="h-3.5 w-3.5" />
                 Cancel
               </Button>
-              <Button size="sm" onClick={handleSave} className="gap-2 bg-teal-500 text-white hover:bg-teal-600">
-                <Save className="h-3.5 w-3.5" />
+              <Button size="sm" onClick={handleSave} disabled={patchUser.isPending} className="gap-2 bg-teal-500 text-white hover:bg-teal-600">
+                {patchUser.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
                 Save Changes
               </Button>
             </>
@@ -249,9 +274,9 @@ export function ProfileView() {
 
         {/* Stats row */}
         <div className="mt-6 grid grid-cols-3 gap-3">
-          <StatCard icon={<Wine className="h-5 w-5" />}     label="Bottles"   value="41" />
-          <StatCard icon={<BookOpen className="h-5 w-5" />} label="Recipes"   value="25" />
-          <StatCard icon={<Star className="h-5 w-5" />}     label="Favorites" value="8"  />
+          <StatCard icon={<Wine className="h-5 w-5" />}     label="Bottles"   value={String(inventory.length)} />
+          <StatCard icon={<BookOpen className="h-5 w-5" />} label="Recipes"   value={String(recipes.length)} />
+          <StatCard icon={<Star className="h-5 w-5" />}     label="Favorites" value={String(favorites.length)} />
         </div>
       </div>
 

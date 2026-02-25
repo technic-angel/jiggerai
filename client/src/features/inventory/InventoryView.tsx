@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { SpiritSelector } from "./SpiritSelector";
 import { InventoryList } from "./InventoryList";
-import { SEED_INVENTORY } from "./inventorySeed";
+import { useInventory } from "@/hooks/useInventory";
 import type { Bottle } from "@/types";
 
 // ─── Filter helpers ──────────────────────────────────────────────────────────
@@ -66,6 +66,7 @@ function filterItems(
 export function InventoryView() {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const { data: inventory = [], isLoading, isError } = useInventory();
 
   function handleToggle(label: string) {
     setSelected((prev) => {
@@ -76,8 +77,8 @@ export function InventoryView() {
   }
 
   const filtered = useMemo(
-    () => filterItems(SEED_INVENTORY, query, selected),
-    [query, selected]
+    () => filterItems(inventory, query, selected),
+    [inventory, query, selected]
   );
 
   return (
@@ -96,7 +97,17 @@ export function InventoryView() {
       <div className="border-t border-border" />
 
       {/* Bottom half — filtered list */}
-      <InventoryList items={filtered} />
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12 text-muted-foreground">
+          <span className="text-sm">Loading your bar…</span>
+        </div>
+      ) : isError ? (
+        <div className="flex items-center justify-center py-12 text-destructive">
+          <span className="text-sm">Failed to load inventory. Is the server running?</span>
+        </div>
+      ) : (
+        <InventoryList items={filtered} />
+      )}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { ArrowLeft, Sparkles, Save, Pencil, Loader2, Plus, X } from "lucide-reac
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { RECIPE_BASE_SPIRITS, RECIPE_CATEGORIES } from "./recipeSeed";
+import { useAddRecipe } from "@/hooks/useRecipes";
 
 // ─── Form field ───────────────────────────────────────────────────────────────
 
@@ -70,6 +71,7 @@ export function AddRecipeView() {
   const [isEditing, setIsEditing] = useState(true);
   const [error, setError] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
+  const addRecipe = useAddRecipe();
 
   function setField<K extends keyof RecipeFormState>(key: K, value: RecipeFormState[K]) {
     setSaved(false);
@@ -146,9 +148,28 @@ export function AddRecipeView() {
   function handleSave() {
     if (!validate()) return;
     setError("");
-    // Phase B: POST /api/recipes
-    setSaved(true);
-    setIsEditing(false);
+    addRecipe.mutate(
+      {
+        name: form.name.trim(),
+        category: form.category,
+        baseSpirit: form.baseSpirit || null,
+        abv: form.abv || null,
+        glassType: form.glassType || null,
+        difficulty: form.difficulty,
+        ingredients: form.ingredients.filter((i) => i.trim()),
+        instructions: form.instructions.trim(),
+        youtubeUrl: form.youtubeUrl || null,
+        imageUrl: form.imageUrl || null,
+      },
+      {
+        onSuccess: () => {
+          setSaved(true);
+          setIsEditing(false);
+          setTimeout(() => navigate("/recipes"), 800);
+        },
+        onError: () => setError("Failed to save. Is the server running?"),
+      }
+    );
   }
 
   const disabled = !isEditing;
@@ -168,9 +189,9 @@ export function AddRecipeView() {
               Edit
             </Button>
           )}
-          <Button onClick={handleSave} disabled={disabled} size="sm" className="gap-2 bg-teal-500 text-white hover:bg-teal-600 disabled:opacity-40">
-            <Save className="h-3.5 w-3.5" />
-            {saved ? "Saved" : "Save"}
+          <Button onClick={handleSave} disabled={disabled || addRecipe.isPending} size="sm" className="gap-2 bg-teal-500 text-white hover:bg-teal-600 disabled:opacity-40">
+            {addRecipe.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            {saved ? "Saved" : addRecipe.isPending ? "Saving…" : "Save"}
           </Button>
         </div>
       </div>
@@ -187,7 +208,7 @@ export function AddRecipeView() {
       )}
       {saved && (
         <div className="rounded-lg border border-teal-500/30 bg-teal-500/10 px-4 py-3 text-sm text-teal-300">
-          ✓ Recipe saved! (Phase B: syncs to database)
+          ✓ Recipe saved! Redirecting…
         </div>
       )}
 
@@ -334,9 +355,9 @@ export function AddRecipeView() {
       {/* Footer */}
       <div className="flex justify-end gap-3 pb-6">
         <Button variant="outline" onClick={() => navigate("/recipes")}>Cancel</Button>
-        <Button onClick={handleSave} disabled={disabled} className="gap-2 bg-teal-500 text-white hover:bg-teal-600 disabled:opacity-40">
-          <Save className="h-4 w-4" />
-          Save Recipe
+        <Button onClick={handleSave} disabled={disabled || addRecipe.isPending} className="gap-2 bg-teal-500 text-white hover:bg-teal-600 disabled:opacity-40">
+          {addRecipe.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+          {addRecipe.isPending ? "Saving…" : "Save Recipe"}
         </Button>
       </div>
     </div>

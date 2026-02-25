@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { db } from './db/index.js';
 import { users, inventory, recipes, shoppingList, ingredients, recipeIngredients, userFavorites, recipeSteps, recipeVariants } from './db/schema.js';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 
 dotenv.config();
@@ -38,6 +38,12 @@ const patchInventorySchema = z.object({
   purchasePrice: z.union([z.number(), z.string()]).nullable().optional(),
   userId: z.string().optional(),
   imageUrl: z.string().url().nullable().optional(),
+  isFavorite: z.number().int().min(0).max(1).optional(),
+  rating: z.number().int().min(1).max(5).nullable().optional(),
+});
+
+const patchUserSchema = z.object({
+  displayName: z.string().min(1).optional(),
 });
 
 const createRecipeSchema = z.object({
@@ -48,6 +54,10 @@ const createRecipeSchema = z.object({
   youtubeUrl: z.string().url().optional(),
   embedding: z.array(z.number()).optional(),
   imageUrl: z.string().url().optional(),
+});
+
+const patchRecipeSchema = z.object({
+  rating: z.number().int().min(1).max(5).nullable().optional(),
 });
 
 // Zod: single recipe step (used inside the bulk-add array)
@@ -83,6 +93,34 @@ app.get('/api/users', async (req, res) => {
   } catch (error) {
     console.error('Error fetching users:', error);
     res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+app.get('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const rows = await db.select().from(users).where(eq(users.id, id));
+    if (!rows || rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    res.json(rows[0]);
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    res.status(500).json({ error: 'Failed to fetch user' });
+  }
+});
+
+app.patch('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const parsed = await patchUserSchema.safeParseAsync(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: 'Validation failed', issues: parsed.error.errors });
+    const rows = await db.select().from(users).where(eq(users.id, id));
+    if (!rows || rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    if (Object.keys(parsed.data).length === 0) return res.status(400).json({ error: 'No valid fields provided to update' });
+    const [updated] = await db.update(users).set(parsed.data).where(eq(users.id, id)).returning();
+    res.json(updated);
+  } catch (error) {
+    console.error('Error updating user:', error);
+    res.status(500).json({ error: 'Failed to update user' });
   }
 });
 
@@ -182,6 +220,8 @@ app.patch('/api/inventory/:id', async (req, res) => {
       updates.volumeEighths = openVol;
       updates.unopenedCount = available - 1;
     }
+    if (typeof parsed.isFavorite === 'number') updates.isFavorite = parsed.isFavorite;
+    if (typeof parsed.rating === 'number' || parsed.rating === null) updates.rating = parsed.rating;
     if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No valid fields provided to update' });
     updates.updatedAt = new Date();
     const updated = await db.update(inventory).set(updates).where(eq(inventory.id, Number(id))).returning();
@@ -204,6 +244,80 @@ app.get('/api/recipes', async (req, res) => {
   }
 });
 
+app.get('/api/recipes/makeable/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const [userInv, allRecipes] = await Promise.all([
+      db.select().from(inventory).where(eq(inventory.userId, userId)),
+      db.select().from(recipes),
+    ]);
+    // Build a lowercase set of all spirit names + categories in the user's inventory
+    const invTerms = new Set<string>();
+    userInv.forEach((item: any) => {
+      if (item.spiritName) item.spiritName.toLowerCase().split(/[\s,]+/).forEach((t: string) => invTerms.add(t));
+      if (item.category) invTerms.add(item.category.toLowerCase());
+    });
+    // Strip leading measure from ingredient string: "2 oz Bourbon" -> "bourbon"
+    const stripMeasure = (s: string) => s.replace(/^[\d./]+ ?(oz|tsp|tbsp|dashes?|dash|ml|cl|drops?|count|pcs?|pc) /i, '').trim().toLowerCase();
+    const makeable = allRecipes.filter((r: any) => {
+      const ings: string[] = Array.isArray(r.ingredients) ? r.ingredients : [];
+      // Garnishes / rims / optional items don't block makeability
+      const required = ings.filter((i: string) => !/(garnish|rim|twist|optional|for garnish|wedge)/i.test(i));
+      if (required.length === 0) return false;
+      return required.every((ing: string) => {
+        const name = stripMeasure(ing);
+        // Match if any word in the stripped name exists in the inventory term set
+        return name.split(/\s+/).some((word: string) => word.length > 2 && invTerms.has(word));
+      });
+    });
+    res.json(makeable);
+  } catch (error) {
+    console.error('Error fetching makeable recipes:', error);
+    res.status(500).json({ error: 'Failed to fetch makeable recipes' });
+  }
+});
+
+app.get('/api/recipes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const rows = await db.select().from(recipes).where(eq(recipes.id, Number(id)));
+    if (!rows || rows.length === 0) return res.status(404).json({ error: 'Recipe not found' });
+    res.json(rows[0]);
+  } catch (error) {
+    console.error('Error fetching recipe:', error);
+    res.status(500).json({ error: 'Failed to fetch recipe' });
+  }
+});
+
+app.delete('/api/recipes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.delete(recipes).where(eq(recipes.id, Number(id)));
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error deleting recipe:', error);
+    res.status(500).json({ error: 'Failed to delete recipe' });
+  }
+});
+
+app.patch('/api/recipes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const parsed = await patchRecipeSchema.safeParseAsync(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: 'Validation failed', issues: parsed.error.errors });
+    const rows = await db.select().from(recipes).where(eq(recipes.id, Number(id)));
+    if (!rows || rows.length === 0) return res.status(404).json({ error: 'Recipe not found' });
+    const updates: any = {};
+    if (typeof parsed.data.rating === 'number' || parsed.data.rating === null) updates.rating = parsed.data.rating;
+    if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No valid fields provided to update' });
+    const [updated] = await db.update(recipes).set(updates).where(eq(recipes.id, Number(id))).returning();
+    res.json(updated);
+  } catch (error) {
+    console.error('Error updating recipe:', error);
+    res.status(500).json({ error: 'Failed to update recipe' });
+  }
+});
+
 // FAVORITES
 app.get('/api/users/:id/favorites', async (req, res) => {
   try {
@@ -211,7 +325,7 @@ app.get('/api/users/:id/favorites', async (req, res) => {
     const favs = await db.select().from(userFavorites).where(eq(userFavorites.userId, id));
     const recipeIds = favs.map((f: any) => f.recipeId);
     if (recipeIds.length === 0) return res.json([]);
-    const rows = await db.select().from(recipes).where(sql`id = ANY(${recipeIds})`);
+    const rows = await db.select().from(recipes).where(inArray(recipes.id, recipeIds));
     res.json(rows);
   } catch (error) {
     console.error('Error fetching favorites:', error);

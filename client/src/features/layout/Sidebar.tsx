@@ -71,7 +71,7 @@ export function Sidebar() {
         >
           <img src="/jigger-logo.svg" alt="Jigger AI logo" className="h-8 w-auto shrink-0" />
           {!collapsed && (
-            <span className="text-lg font-bold tracking-tight text-white">jigger.ai</span>
+            <span className="text-lg font-bold tracking-tight text-white">Jigger.ai</span>
           )}
         </NavLink>
 

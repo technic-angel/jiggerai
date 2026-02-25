@@ -2,9 +2,10 @@ import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Heart } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { SEED_RECIPES } from "@/features/recipes/recipeSeed";
 import { SPIRIT_EMOJI } from "@/features/recipes/recipeSeed";
-import type { SeedRecipe } from "@/features/recipes/recipeSeed";
+import { useRecipes, useMakeableRecipes } from "@/hooks/useRecipes";
+import { useFavoriteIds } from "@/hooks/useFavorites";
+import type { Recipe } from "@/types";
 
 // ─── Seeded shuffle (deterministic per session) ───────────────────────────────
 
@@ -19,14 +20,14 @@ function seededShuffle<T>(arr: T[], seed: number): T[] {
   return copy;
 }
 
-function buildHomeFeed(recipes: SeedRecipe[]): SeedRecipe[] {
+function buildHomeFeed(recipes: Recipe[]): Recipe[] {
   const favorites = recipes.filter((r) => r.isFavorite);
   const nonFavorites = seededShuffle(
     recipes.filter((r) => !r.isFavorite),
     Date.now() & 0xffff
   );
   // Interleave: 1 favorite every ~3 non-favorites
-  const result: SeedRecipe[] = [];
+  const result: Recipe[] = [];
   let fi = 0;
   let ni = 0;
   while (result.length < 24 && (fi < favorites.length || ni < nonFavorites.length)) {
@@ -43,7 +44,7 @@ function buildHomeFeed(recipes: SeedRecipe[]): SeedRecipe[] {
 
 // ─── Recipe tile ─────────────────────────────────────────────────────────────
 
-function RecipeTile({ recipe, onClick }: { recipe: SeedRecipe; onClick: () => void }) {
+function RecipeTile({ recipe, onClick }: { recipe: Recipe; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
@@ -56,7 +57,7 @@ function RecipeTile({ recipe, onClick }: { recipe: SeedRecipe; onClick: () => vo
       {/* Background emoji / image */}
       <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-transparent to-black/60">
         <span className="text-7xl opacity-60 group-hover:opacity-80 group-hover:scale-110 transition-transform duration-300">
-          {SPIRIT_EMOJI[recipe.baseSpirit] ?? recipe.imageEmoji}
+          {(recipe.baseSpirit ? SPIRIT_EMOJI[recipe.baseSpirit] : null) ?? recipe.imageEmoji ?? "🍹"}
         </span>
       </div>
 
@@ -93,7 +94,23 @@ function RecipeTile({ recipe, onClick }: { recipe: SeedRecipe; onClick: () => vo
 
 export function HomeView() {
   const navigate = useNavigate();
-  const feed = useMemo(() => buildHomeFeed(SEED_RECIPES), []);
+  const { data: allRecipes = [], isLoading } = useRecipes();
+  const { data: makeableRecipes = [] } = useMakeableRecipes();
+  const favoriteIds = useFavoriteIds();
+
+  const makeableIds = useMemo(() => new Set(makeableRecipes.map((r) => r.id)), [makeableRecipes]);
+
+  const enriched = useMemo<Recipe[]>(
+    () =>
+      allRecipes.map((r) => ({
+        ...r,
+        isMakeable: makeableIds.has(r.id),
+        isFavorite: favoriteIds.has(r.id),
+      })),
+    [allRecipes, makeableIds, favoriteIds]
+  );
+
+  const feed = useMemo(() => buildHomeFeed(enriched), [enriched]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -108,6 +125,11 @@ export function HomeView() {
             2 cols  @ < sm
             4 cols  @ sm–lg
             6 cols  @ lg+               */}
+      {isLoading ? (
+        <div className="flex items-center justify-center py-16 text-muted-foreground">
+          <span className="text-sm">Loading your feed…</span>
+        </div>
+      ) : (
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
         {feed.map((recipe) => (
           <RecipeTile
@@ -117,6 +139,7 @@ export function HomeView() {
           />
         ))}
       </div>
+      )}
     </div>
   );
 }
