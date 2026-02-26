@@ -2,8 +2,9 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { RecipeCategorySelector, type RecipeFilters } from "./RecipeCategorySelector";
 import { RecipeList } from "./RecipeList";
-import { SEED_RECIPES } from "./recipeSeed";
-import type { SeedRecipe } from "./recipeSeed";
+import { useRecipes, useMakeableRecipes } from "@/hooks/useRecipes";
+import { useFavoriteIds } from "@/hooks/useFavorites";
+import type { Recipe } from "@/types";
 
 const DEFAULT_FILTERS: RecipeFilters = {
   query: "",
@@ -17,22 +18,39 @@ export function RecipesView() {
   const navigate = useNavigate();
   const [filters, setFilters] = useState<RecipeFilters>(DEFAULT_FILTERS);
 
+  const { data: allRecipes = [], isLoading } = useRecipes();
+  const { data: makeableRecipes = [] } = useMakeableRecipes();
+  const favoriteIds = useFavoriteIds();
+
+  // Build enriched recipe list: merge isMakeable + isFavorite derived fields
+  const makeableIds = useMemo(() => new Set(makeableRecipes.map((r) => r.id)), [makeableRecipes]);
+
+  const recipes = useMemo<Recipe[]>(
+    () =>
+      allRecipes.map((r) => ({
+        ...r,
+        isMakeable: makeableIds.has(r.id),
+        isFavorite: favoriteIds.has(r.id),
+      })),
+    [allRecipes, makeableIds, favoriteIds]
+  );
+
   const filtered = useMemo(() => {
     const q = filters.query.trim().toLowerCase();
-    return SEED_RECIPES.filter((r: SeedRecipe) => {
+    return recipes.filter((r: Recipe) => {
       if (q) {
         const haystack = r.name.toLowerCase() + " " + r.ingredients.join(" ").toLowerCase();
         if (!haystack.includes(q)) return false;
       }
-      if (filters.spirits.size > 0 && !filters.spirits.has(r.baseSpirit)) return false;
+      if (filters.spirits.size > 0 && !filters.spirits.has(r.baseSpirit ?? "")) return false;
       if (filters.styles.size > 0 && !filters.styles.has(r.category)) return false;
       if (filters.makeableOnly && !r.isMakeable) return false;
       if (filters.favoritesOnly && !r.isFavorite) return false;
       return true;
     });
-  }, [filters]);
+  }, [filters, recipes]);
 
-  function handleSelect(recipe: SeedRecipe) {
+  function handleSelect(recipe: Recipe) {
     navigate(`/recipes/${recipe.id}`);
   }
 
@@ -65,7 +83,13 @@ export function RecipesView() {
         }
       />
 
-      <RecipeList items={filtered} onSelect={handleSelect} />
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12 text-muted-foreground">
+          <span className="text-sm">Loading recipes…</span>
+        </div>
+      ) : (
+        <RecipeList items={filtered} onSelect={handleSelect} />
+      )}
     </div>
   );
 }

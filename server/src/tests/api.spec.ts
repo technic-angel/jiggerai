@@ -32,9 +32,15 @@ vi.mock('../db/schema.js', () => ({
   inventory: {
     id: 'id', userId: 'userId', spiritName: 'spiritName', category: 'category',
     volumeEighths: 'volumeEighths', purchasePrice: 'purchasePrice',
-    unopenedCount: 'unopenedCount', name: 'name',
+    unopenedCount: 'unopenedCount', name: 'name', isFavorite: 'isFavorite',
+    rating: 'rating',
   },
-  recipes: { id: 'id', name: 'name', embedding: 'embedding', flavorEmbedding: 'flavorEmbedding' },
+  recipes: {
+    id: 'id', name: 'name', embedding: 'embedding', flavorEmbedding: 'flavorEmbedding',
+    baseSpirit: 'baseSpirit', abv: 'abv', glassType: 'glassType',
+    difficulty: 'difficulty', imageEmoji: 'imageEmoji', ingredients: 'ingredients',
+    rating: 'rating',
+  },
   shoppingList: {},
   ingredients: { id: 'id', name: 'name', type: 'type', category: 'category' },
   recipeIngredients: { recipeId: 'recipeId' },
@@ -83,10 +89,14 @@ const USER = { id: 'user-1', email: 'test@test.com', displayName: 'Test' };
 const INV_ITEM = {
   id: 1, userId: 'user-1', spiritName: 'Hendricks Gin', category: 'Gin',
   volumeEighths: 8, purchasePrice: '40.00', unopenedCount: 2, updatedAt: new Date(),
+  rating: null,
 };
 const RECIPE = {
-  id: 1, name: 'Negroni', category: 'Cocktail', ingredients: ['Gin', 'Campari', 'Vermouth'],
+  id: 1, name: 'Negroni', category: 'Stirred', baseSpirit: 'Gin',
+  ingredients: ['1 oz Gin', '1 oz Campari', '1 oz Sweet Vermouth'],
   instructions: 'Stir', youtubeUrl: null, embedding: null,
+  abv: '24%', glassType: 'Rocks', difficulty: 'Easy', imageEmoji: '🍊',
+  rating: null,
 };
 const INGREDIENT = { id: 1, name: 'Dry Gin', type: 'spirit', category: 'Gin', unit: 'ml' };
 
@@ -551,7 +561,8 @@ describe('GET /api/search/spirits', () => {
     mockSelect.mockReturnValueOnce(makeChain([RECIPE]));
     const res = await request(app).get('/api/search/spirits?q=Gin');
     expect(res.status).toBe(200);
-    expect(res.body).toContain('Gin');
+    // ingredients are full strings like "1 oz Gin"; search returns the full string
+    expect(res.body.some((s: string) => s.toLowerCase().includes('gin'))).toBe(true);
   });
 
   it('200 – also checks inventory when userId provided', async () => {
@@ -1073,6 +1084,212 @@ describe('VARIANT STEPS', () => {
 });
 
 // ===========================================================================
+// GET /api/recipes/:id  (single recipe)
+// ===========================================================================
+describe('GET /api/recipes/:id', () => {
+  it('200 – returns the recipe', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([RECIPE]));
+    const res = await request(app).get('/api/recipes/1');
+    expect(res.status).toBe(200);
+    expect(res.body.name).toBe('Negroni');
+    expect(res.body.baseSpirit).toBe('Gin');
+    expect(res.body.difficulty).toBe('Easy');
+  });
+
+  it('404 – recipe not found', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([]));
+    const res = await request(app).get('/api/recipes/999');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not found/i);
+  });
+
+  it('500 – db error', async () => {
+    mockSelect.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app).get('/api/recipes/1');
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/fetch recipe/i);
+  });
+});
+
+// ===========================================================================
+// GET /api/recipes/makeable/:userId
+// ===========================================================================
+describe('GET /api/recipes/makeable/:userId', () => {
+  const GIN_INV = [{ spiritName: "Hendrick's Gin", category: 'Gin' },
+                   { spiritName: 'Campari', category: 'Liqueur' },
+                   { spiritName: 'Dolin Sweet Vermouth', category: 'Vermouth' }];
+
+  const NEGRONI = { id: 1, name: 'Negroni', category: 'Stirred',
+    ingredients: ['1 oz Gin', '1 oz Sweet Vermouth', '1 oz Campari', 'Orange peel garnish'] };
+  const MARGARITA = { id: 2, name: 'Margarita', category: 'Sour',
+    ingredients: ['2 oz Tequila', '1 oz Lime Juice', '0.75 oz Triple Sec', 'Salt rim'] };
+
+  it('200 – returns only makeable recipes', async () => {
+    mockSelect
+      .mockReturnValueOnce(makeChain(GIN_INV))
+      .mockReturnValueOnce(makeChain([NEGRONI, MARGARITA]));
+    const res = await request(app).get('/api/recipes/makeable/user-1');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    // Negroni should be makeable (Gin, Vermouth, Campari all present); Margarita should not
+    expect(res.body.some((r: any) => r.name === 'Negroni')).toBe(true);
+    expect(res.body.some((r: any) => r.name === 'Margarita')).toBe(false);
+  });
+
+  it('200 – returns empty array when no inventory', async () => {
+    mockSelect
+      .mockReturnValueOnce(makeChain([]))
+      .mockReturnValueOnce(makeChain([NEGRONI]));
+    const res = await request(app).get('/api/recipes/makeable/user-1');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(0);
+  });
+
+  it('200 – skips recipes with empty ingredients array', async () => {
+    mockSelect
+      .mockReturnValueOnce(makeChain(GIN_INV))
+      .mockReturnValueOnce(makeChain([{ id: 3, name: 'Empty', category: 'Other', ingredients: [] }]));
+    const res = await request(app).get('/api/recipes/makeable/user-1');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(0);
+  });
+
+  it('200 – handles null ingredients gracefully', async () => {
+    mockSelect
+      .mockReturnValueOnce(makeChain(GIN_INV))
+      .mockReturnValueOnce(makeChain([{ id: 4, name: 'Null Ings', category: 'Other', ingredients: null }]));
+    const res = await request(app).get('/api/recipes/makeable/user-1');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('500 – db error', async () => {
+    mockSelect.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app).get('/api/recipes/makeable/user-1');
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/makeable/i);
+  });
+});
+
+// ===========================================================================
+// GET /api/users/:id
+// ===========================================================================
+describe('GET /api/users/:id', () => {
+  it('200 – returns user', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([USER]));
+    const res = await request(app).get('/api/users/user-1');
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe('user-1');
+    expect(res.body.displayName).toBe('Test');
+  });
+
+  it('404 – user not found', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([]));
+    const res = await request(app).get('/api/users/ghost');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not found/i);
+  });
+
+  it('500 – db error', async () => {
+    mockSelect.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app).get('/api/users/user-1');
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/fetch user/i);
+  });
+});
+
+// ===========================================================================
+// PATCH /api/users/:id
+// ===========================================================================
+describe('PATCH /api/users/:id', () => {
+  it('200 – updates displayName', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([USER]));
+    mockUpdate.mockReturnValueOnce(makeChain([{ ...USER, displayName: 'Melissa' }]));
+    const res = await request(app).patch('/api/users/user-1').send({ displayName: 'Melissa' });
+    expect(res.status).toBe(200);
+    expect(res.body.displayName).toBe('Melissa');
+  });
+
+  it('400 – Zod validation failure (displayName too short)', async () => {
+    const res = await request(app).patch('/api/users/user-1').send({ displayName: '' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/validation/i);
+  });
+
+  it('400 – non-JSON body triggers req.body || {} fallback (no valid fields)', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([USER]));
+    const res = await request(app)
+      .patch('/api/users/user-1')
+      .set('Content-Type', 'text/plain')
+      .send('');
+    // req.body is undefined → fallback to {} → safeParseAsync({}) succeeds →
+    // 0 keys in parsed.data → "No valid fields" 400
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/no valid fields/i);
+  });
+
+  it('400 – empty body (no valid fields)', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([USER]));
+    const res = await request(app).patch('/api/users/user-1').send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/no valid fields/i);
+  });
+
+  it('404 – user not found (null rows)', async () => {
+    mockSelect.mockReturnValueOnce(makeChain(null));
+    const res = await request(app).patch('/api/users/ghost').send({ displayName: 'X' });
+    expect(res.status).toBe(404);
+  });
+
+  it('404 – user not found', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([]));
+    const res = await request(app).patch('/api/users/ghost').send({ displayName: 'X' });
+    expect(res.status).toBe(404);
+  });
+
+  it('500 – db error on select', async () => {
+    mockSelect.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app).patch('/api/users/user-1').send({ displayName: 'Mel' });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/update user/i);
+  });
+
+  it('500 – db error on update', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([USER]));
+    mockUpdate.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app).patch('/api/users/user-1').send({ displayName: 'Mel' });
+    expect(res.status).toBe(500);
+  });
+});
+
+// ===========================================================================
+// PATCH /api/inventory/:id — isFavorite toggle
+// ===========================================================================
+describe('PATCH /api/inventory/:id isFavorite', () => {
+  it('200 – sets isFavorite to 1 (favorite)', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([INV_ITEM]));
+    mockUpdate.mockReturnValueOnce(makeChain([{ ...INV_ITEM, isFavorite: 1 }]));
+    const res = await request(app).patch('/api/inventory/1').send({ isFavorite: 1 });
+    expect(res.status).toBe(200);
+    expect(res.body.isFavorite).toBe(1);
+  });
+
+  it('200 – sets isFavorite to 0 (unfavorite)', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([{ ...INV_ITEM, isFavorite: 1 }]));
+    mockUpdate.mockReturnValueOnce(makeChain([{ ...INV_ITEM, isFavorite: 0 }]));
+    const res = await request(app).patch('/api/inventory/1').send({ isFavorite: 0 });
+    expect(res.status).toBe(200);
+    expect(res.body.isFavorite).toBe(0);
+  });
+
+  it('400 – isFavorite out of range rejects via Zod', async () => {
+    const res = await request(app).patch('/api/inventory/1').send({ isFavorite: 2 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/validation/i);
+  });
+});
+
+// ===========================================================================
 // FULL RECIPE  GET /api/recipes/:id/full
 // ===========================================================================
 describe('FULL RECIPE', () => {
@@ -1123,5 +1340,112 @@ describe('FULL RECIPE', () => {
     mockSelect.mockImplementationOnce(() => { throw new Error('DB down'); });
     const res = await request(app).get('/api/recipes/1/full');
     expect(res.status).toBe(500);
+  });
+});
+
+// ===========================================================================
+// DELETE /api/recipes/:id
+// ===========================================================================
+describe('DELETE /api/recipes/:id', () => {
+  it('204 – deletes recipe', async () => {
+    mockDelete.mockReturnValueOnce(makeChain(undefined));
+    const res = await request(app).delete('/api/recipes/1');
+    expect(res.status).toBe(204);
+  });
+
+  it('500 – db error', async () => {
+    mockDelete.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app).delete('/api/recipes/1');
+    expect(res.status).toBe(500);
+  });
+});
+
+// ===========================================================================
+// PATCH /api/recipes/:id  (rating)
+// ===========================================================================
+describe('PATCH /api/recipes/:id', () => {
+  it('400 – Zod validation failure (rating out of range)', async () => {
+    const res = await request(app).patch('/api/recipes/1').send({ rating: 6 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/validation/i);
+  });
+
+  it('400 – non-JSON body hits req.body || {} fallback (no valid fields)', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([RECIPE]));
+    const res = await request(app)
+      .patch('/api/recipes/1')
+      .set('Content-Type', 'text/plain')
+      .send('');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/no valid fields/i);
+  });
+
+  it('400 – no valid fields (empty body)', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([RECIPE]));
+    const res = await request(app).patch('/api/recipes/1').send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/no valid fields/i);
+  });
+
+  it('500 – db error on select', async () => {
+    mockSelect.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app).patch('/api/recipes/1').send({ rating: 4 });
+    expect(res.status).toBe(500);
+  });
+
+  it('404 – recipe not found', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([]));
+    const res = await request(app).patch('/api/recipes/1').send({ rating: 4 });
+    expect(res.status).toBe(404);
+  });
+
+  it('200 – sets rating to 5', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([RECIPE]));
+    mockUpdate.mockReturnValueOnce(makeChain([{ ...RECIPE, rating: 5 }]));
+    const res = await request(app).patch('/api/recipes/1').send({ rating: 5 });
+    expect(res.status).toBe(200);
+    expect(res.body.rating).toBe(5);
+  });
+
+  it('200 – clears rating to null', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([{ ...RECIPE, rating: 5 }]));
+    mockUpdate.mockReturnValueOnce(makeChain([{ ...RECIPE, rating: null }]));
+    const res = await request(app).patch('/api/recipes/1').send({ rating: null });
+    expect(res.status).toBe(200);
+    expect(res.body.rating).toBeNull();
+  });
+
+  it('500 – db error on update', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([RECIPE]));
+    mockUpdate.mockImplementationOnce(() => { throw new Error('DB down'); });
+    const res = await request(app).patch('/api/recipes/1').send({ rating: 3 });
+    expect(res.status).toBe(500);
+  });
+});
+
+// ===========================================================================
+// PATCH /api/inventory/:id — rating
+// ===========================================================================
+describe('PATCH /api/inventory/:id rating', () => {
+  it('200 – sets rating to 4', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([INV_ITEM]));
+    mockUpdate.mockReturnValueOnce(makeChain([{ ...INV_ITEM, rating: 4 }]));
+    const res = await request(app).patch('/api/inventory/1').send({ rating: 4 });
+    expect(res.status).toBe(200);
+    expect(res.body.rating).toBe(4);
+  });
+
+  it('200 – clears rating to null', async () => {
+    mockSelect.mockReturnValueOnce(makeChain([{ ...INV_ITEM, rating: 4 }]));
+    mockUpdate.mockReturnValueOnce(makeChain([{ ...INV_ITEM, rating: null }]));
+    const res = await request(app).patch('/api/inventory/1').send({ rating: null });
+    expect(res.status).toBe(200);
+    expect(res.body.rating).toBeNull();
+  });
+
+  it('400 – rating out of range rejects via Zod', async () => {
+    const res = await request(app).patch('/api/inventory/1').send({ rating: 6 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/validation/i);
   });
 });

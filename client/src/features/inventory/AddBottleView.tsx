@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Sparkles, Save, Pencil, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useAddBottle } from "@/hooks/useInventory";
 
 // ─── Category options (mirrors SpiritSelector tiles) ─────────────────────────
 
@@ -68,6 +69,7 @@ export function AddBottleView() {
   const [saved, setSaved] = useState(false);
   const [isEditing, setIsEditing] = useState(true);
   const [error, setError] = useState("");
+  const addBottle = useAddBottle();
 
   function set<K extends keyof BottleFormState>(key: K, value: BottleFormState[K]) {
     setSaved(false);
@@ -127,9 +129,23 @@ export function AddBottleView() {
   function handleSave() {
     if (!validate()) return;
     setError("");
-    // Phase B: POST /api/inventory
-    setSaved(true);
-    setIsEditing(false);
+    addBottle.mutate(
+      {
+        spiritName: form.spiritName.trim(),
+        category: form.category,
+        volumeEighths: form.volumeEighths,
+        unopenedCount: form.unopenedCount,
+        purchasePrice: form.purchasePrice || null,
+      },
+      {
+        onSuccess: () => {
+          setSaved(true);
+          setIsEditing(false);
+          setTimeout(() => navigate("/my-bar"), 800);
+        },
+        onError: () => setError("Failed to save. Is the server running?"),
+      }
+    );
   }
 
   function handleEdit() {
@@ -156,12 +172,12 @@ export function AddBottleView() {
           )}
           <Button
             onClick={handleSave}
-            disabled={disabled}
+            disabled={disabled || addBottle.isPending}
             size="sm"
             className="gap-2 bg-teal-500 text-white hover:bg-teal-600 disabled:opacity-40"
           >
-            <Save className="h-3.5 w-3.5" />
-            {saved ? "Saved" : "Save"}
+            {addBottle.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            {saved ? "Saved" : addBottle.isPending ? "Saving…" : "Save"}
           </Button>
         </div>
       </div>
@@ -181,7 +197,7 @@ export function AddBottleView() {
 
       {saved && (
         <div className="rounded-lg border border-teal-500/30 bg-teal-500/10 px-4 py-3 text-sm text-teal-300">
-          ✓ Item saved to your bar! (Phase B: syncs to database)
+          ✓ Item saved to your bar! Redirecting…
         </div>
       )}
 
@@ -313,11 +329,11 @@ export function AddBottleView() {
         <Button variant="outline" onClick={() => navigate("/my-bar")}>Cancel</Button>
         <Button
           onClick={handleSave}
-          disabled={disabled}
+          disabled={disabled || addBottle.isPending}
           className="gap-2 bg-teal-500 text-white hover:bg-teal-600 disabled:opacity-40"
         >
-          <Save className="h-4 w-4" />
-          Save to My Bar
+          {addBottle.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+          {addBottle.isPending ? "Saving…" : "Save to My Bar"}
         </Button>
       </div>
     </div>

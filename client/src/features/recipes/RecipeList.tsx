@@ -1,20 +1,21 @@
 import { Heart } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { SeedRecipe } from "./recipeSeed";
+import type { Recipe } from "@/types";
 import { SPIRIT_EMOJI } from "./recipeSeed";
 
 // ─── Difficulty badge ─────────────────────────────────────────────────────────
 
-function DifficultyDot({ difficulty }: { difficulty: SeedRecipe["difficulty"] }) {
-  const colors = {
+function DifficultyDot({ difficulty }: { difficulty: string | null | undefined }) {
+  const colors: Record<string, string> = {
     Easy:   "bg-teal-400",
     Medium: "bg-amber-400",
     Hard:   "bg-red-400",
   };
+  const color = difficulty ? (colors[difficulty] ?? "bg-muted") : "bg-muted";
   return (
     <span
-      className={cn("inline-block h-2 w-2 rounded-full shrink-0", colors[difficulty])}
-      title={difficulty}
+      className={cn("inline-block h-2 w-2 rounded-full shrink-0", color)}
+      title={difficulty ?? "Unknown"}
     />
   );
 }
@@ -22,8 +23,8 @@ function DifficultyDot({ difficulty }: { difficulty: SeedRecipe["difficulty"] })
 // ─── Single row ──────────────────────────────────────────────────────────────
 
 interface RecipeRowProps {
-  recipe: SeedRecipe;
-  onClick: (recipe: SeedRecipe) => void;
+  recipe: Recipe;
+  onClick: (recipe: Recipe) => void;
 }
 
 function RecipeRow({ recipe, onClick }: RecipeRowProps) {
@@ -34,7 +35,7 @@ function RecipeRow({ recipe, onClick }: RecipeRowProps) {
     >
       {/* Spirit emoji */}
       <span className="w-7 text-center text-lg leading-none shrink-0">
-        {SPIRIT_EMOJI[recipe.baseSpirit] ?? "🍹"}
+        {(recipe.baseSpirit ? SPIRIT_EMOJI[recipe.baseSpirit] : null) ?? "🍹"}
       </span>
 
       {/* Name + category */}
@@ -67,8 +68,8 @@ function RecipeRow({ recipe, onClick }: RecipeRowProps) {
 // ─── Main component ──────────────────────────────────────────────────────────
 
 interface RecipeListProps {
-  items: SeedRecipe[];
-  onSelect: (recipe: SeedRecipe) => void;
+  items: Recipe[];
+  onSelect: (recipe: Recipe) => void;
 }
 
 export function RecipeList({ items, onSelect }: RecipeListProps) {

@@ -3,8 +3,9 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { db } from './db/index.js';
 import { users, inventory, recipes, shoppingList, ingredients, recipeIngredients, userFavorites, recipeSteps, recipeVariants } from './db/schema.js';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, inArray } from 'drizzle-orm';
 import { z } from 'zod';
+import { runner } from './agents/runner.js';
 
 dotenv.config();
 
@@ -38,6 +39,12 @@ const patchInventorySchema = z.object({
   purchasePrice: z.union([z.number(), z.string()]).nullable().optional(),
   userId: z.string().optional(),
   imageUrl: z.string().url().nullable().optional(),
+  isFavorite: z.number().int().min(0).max(1).optional(),
+  rating: z.number().int().min(1).max(5).nullable().optional(),
+});
+
+const patchUserSchema = z.object({
+  displayName: z.string().min(1).optional(),
 });
 
 const createRecipeSchema = z.object({
@@ -48,6 +55,10 @@ const createRecipeSchema = z.object({
   youtubeUrl: z.string().url().optional(),
   embedding: z.array(z.number()).optional(),
   imageUrl: z.string().url().optional(),
+});
+
+const patchRecipeSchema = z.object({
+  rating: z.number().int().min(1).max(5).nullable().optional(),
 });
 
 // Zod: single recipe step (used inside the bulk-add array)
@@ -83,6 +94,34 @@ app.get('/api/users', async (req, res) => {
   } catch (error) {
     console.error('Error fetching users:', error);
     res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+app.get('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const rows = await db.select().from(users).where(eq(users.id, id));
+    if (!rows || rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    res.json(rows[0]);
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    res.status(500).json({ error: 'Failed to fetch user' });
+  }
+});
+
+app.patch('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const parsed = await patchUserSchema.safeParseAsync(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: 'Validation failed', issues: parsed.error.errors });
+    const rows = await db.select().from(users).where(eq(users.id, id));
+    if (!rows || rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    if (Object.keys(parsed.data).length === 0) return res.status(400).json({ error: 'No valid fields provided to update' });
+    const [updated] = await db.update(users).set(parsed.data).where(eq(users.id, id)).returning();
+    res.json(updated);
+  } catch (error) {
+    console.error('Error updating user:', error);
+    res.status(500).json({ error: 'Failed to update user' });
   }
 });
 
@@ -182,6 +221,8 @@ app.patch('/api/inventory/:id', async (req, res) => {
       updates.volumeEighths = openVol;
       updates.unopenedCount = available - 1;
     }
+    if (typeof parsed.isFavorite === 'number') updates.isFavorite = parsed.isFavorite;
+    if (typeof parsed.rating === 'number' || parsed.rating === null) updates.rating = parsed.rating;
     if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No valid fields provided to update' });
     updates.updatedAt = new Date();
     const updated = await db.update(inventory).set(updates).where(eq(inventory.id, Number(id))).returning();
@@ -204,6 +245,80 @@ app.get('/api/recipes', async (req, res) => {
   }
 });
 
+app.get('/api/recipes/makeable/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const [userInv, allRecipes] = await Promise.all([
+      db.select().from(inventory).where(eq(inventory.userId, userId)),
+      db.select().from(recipes),
+    ]);
+    // Build a lowercase set of all spirit names + categories in the user's inventory
+    const invTerms = new Set<string>();
+    userInv.forEach((item: any) => {
+      if (item.spiritName) item.spiritName.toLowerCase().split(/[\s,]+/).forEach((t: string) => invTerms.add(t));
+      if (item.category) invTerms.add(item.category.toLowerCase());
+    });
+    // Strip leading measure from ingredient string: "2 oz Bourbon" -> "bourbon"
+    const stripMeasure = (s: string) => s.replace(/^[\d./]+ ?(oz|tsp|tbsp|dashes?|dash|ml|cl|drops?|count|pcs?|pc) /i, '').trim().toLowerCase();
+    const makeable = allRecipes.filter((r: any) => {
+      const ings: string[] = Array.isArray(r.ingredients) ? r.ingredients : [];
+      // Garnishes / rims / optional items don't block makeability
+      const required = ings.filter((i: string) => !/(garnish|rim|twist|optional|for garnish|wedge)/i.test(i));
+      if (required.length === 0) return false;
+      return required.every((ing: string) => {
+        const name = stripMeasure(ing);
+        // Match if any word in the stripped name exists in the inventory term set
+        return name.split(/\s+/).some((word: string) => word.length > 2 && invTerms.has(word));
+      });
+    });
+    res.json(makeable);
+  } catch (error) {
+    console.error('Error fetching makeable recipes:', error);
+    res.status(500).json({ error: 'Failed to fetch makeable recipes' });
+  }
+});
+
+app.get('/api/recipes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const rows = await db.select().from(recipes).where(eq(recipes.id, Number(id)));
+    if (!rows || rows.length === 0) return res.status(404).json({ error: 'Recipe not found' });
+    res.json(rows[0]);
+  } catch (error) {
+    console.error('Error fetching recipe:', error);
+    res.status(500).json({ error: 'Failed to fetch recipe' });
+  }
+});
+
+app.delete('/api/recipes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.delete(recipes).where(eq(recipes.id, Number(id)));
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error deleting recipe:', error);
+    res.status(500).json({ error: 'Failed to delete recipe' });
+  }
+});
+
+app.patch('/api/recipes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const parsed = await patchRecipeSchema.safeParseAsync(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: 'Validation failed', issues: parsed.error.errors });
+    const rows = await db.select().from(recipes).where(eq(recipes.id, Number(id)));
+    if (!rows || rows.length === 0) return res.status(404).json({ error: 'Recipe not found' });
+    const updates: any = {};
+    if (typeof parsed.data.rating === 'number' || parsed.data.rating === null) updates.rating = parsed.data.rating;
+    if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No valid fields provided to update' });
+    const [updated] = await db.update(recipes).set(updates).where(eq(recipes.id, Number(id))).returning();
+    res.json(updated);
+  } catch (error) {
+    console.error('Error updating recipe:', error);
+    res.status(500).json({ error: 'Failed to update recipe' });
+  }
+});
+
 // FAVORITES
 app.get('/api/users/:id/favorites', async (req, res) => {
   try {
@@ -211,7 +326,7 @@ app.get('/api/users/:id/favorites', async (req, res) => {
     const favs = await db.select().from(userFavorites).where(eq(userFavorites.userId, id));
     const recipeIds = favs.map((f: any) => f.recipeId);
     if (recipeIds.length === 0) return res.json([]);
-    const rows = await db.select().from(recipes).where(sql`id = ANY(${recipeIds})`);
+    const rows = await db.select().from(recipes).where(inArray(recipes.id, recipeIds));
     res.json(rows);
   } catch (error) {
     console.error('Error fetching favorites:', error);
@@ -560,4 +675,258 @@ app.get('/api/recipes/:id/full', async (req, res) => {
     console.error('Error fetching full recipe:', error);
     res.status(500).json({ error: 'Failed to fetch full recipe' });
   }
+});
+
+// ============================================
+// DEV FALLBACK: Mock Mixologist responses
+// Used automatically when the Gemini API quota is exceeded.
+// Remove this once billing is enabled on the API key.
+// ============================================
+function getMockMixologistResponse(message: string): string {
+  const m = message.toLowerCase();
+
+  if (m.includes('vodka')) {
+    return `Great choice! 🍸 Vodka is super versatile. Here are three classics:
+
+**1. Moscow Mule** — Vodka, ginger beer, and lime juice over ice in a copper mug. Refreshing and easy to make.
+
+**2. Cosmopolitan** — Vodka, triple sec, cranberry juice, and fresh lime. Shaken cold and served up — a true crowd-pleaser.
+
+**3. Vodka Soda with Citrus** — Crisp, simple, and low-calorie. Just vodka, sparkling water, and a big squeeze of lemon or lime.
+
+Which direction appeals to you — something classic, fruity, or light and refreshing? 🥂`;
+  }
+
+  if (m.includes('gin')) {
+    return `Gin lovers, welcome! 🌿 Here are some fantastic options:
+
+**1. Gin & Tonic** — The classic. London Dry gin, tonic water, lime, and ice. Garnish with cucumber or juniper berries.
+
+**2. Negroni** — Gin, Campari, sweet vermouth. Equal parts, stirred over ice — bold and sophisticated.
+
+**3. Tom Collins** — Gin, lemon juice, simple syrup, soda water. Light and citrusy, perfect for a warm day.
+
+Are you in the mood for something bitter, citrusy, or light? 🍋`;
+  }
+
+  if (m.includes('whiskey') || m.includes('bourbon') || m.includes('whisky')) {
+    return `Whiskey! Now we're talking 🥃 Here are three standouts:
+
+**1. Old Fashioned** — Bourbon, a sugar cube, Angostura bitters, and an orange twist. The king of whiskey cocktails.
+
+**2. Whiskey Sour** — Bourbon, fresh lemon juice, simple syrup, and optionally an egg white for froth. Tart and smooth.
+
+**3. Manhattan** — Rye or bourbon, sweet vermouth, bitters. Stirred, served up with a cherry. Elegant and warming.
+
+Are you feeling something stirred and spirit-forward, or more citrusy and accessible? 🍊`;
+  }
+
+  if (m.includes('rum')) {
+    return `Rum is fantastic! 🍹 Tropical vibes incoming:
+
+**1. Daiquiri** — White rum, fresh lime juice, simple syrup. Shaken hard, served up. Perfectly balanced.
+
+**2. Dark & Stormy** — Dark rum and ginger beer with a squeeze of lime. Best made with Gosling's Black Seal.
+
+**3. Mojito** — White rum, fresh mint, lime, sugar, soda water. The classic summer refresh.
+
+Would you like something tropical and sweet, or bright and citrusy? 🌴`;
+  }
+
+  if (m.includes('hello') || m.includes('hi') || m.includes('hey')) {
+    return `Hey there! Great to meet you 🍸 I'm Mixologist — your cocktail guide inside Jigger.ai.
+
+Whether you want to know what to make with what's in your bar, learn a new technique, or just get inspired — I've got you covered.
+
+What are you in the mood for today? Something classic, fruity, boozy, or low-ABV? 🥂`;
+  }
+
+  // Default response
+  return `Great question! 🍸 Here's my take:
+
+The key to a great cocktail is **balance** — you want sweetness, acidity, and strength working together.
+
+A good starting point for any spirit is a classic sour template:
+- **2 oz** of your base spirit
+- **¾ oz** fresh citrus juice (lemon or lime)
+- **¾ oz** simple syrup
+- Shake hard with ice and strain
+
+From there you can riff endlessly. What spirit or flavor profile did you have in mind? I can give you specific recommendations! 🥂`;
+}
+
+// ============================================
+// ADK CHAT STREAMING ENDPOINT (SSE)
+// ============================================
+
+/**
+ * POST /api/chat/stream
+ * 
+ * Streams a real-time response from Jigger using Server-Sent Events (SSE).
+ * 
+ * Request body:
+ *   { userId, sessionId, message }
+ * 
+ * Response (SSE stream):
+ *   data: { type: 'token', text: '...', agent: 'jigger_coordinator' }
+ *   data: { type: 'token', text: '...' }
+ *   ...
+ *   data: { type: 'done' }
+ * 
+ * Error format:
+ *   data: { type: 'error', message: 'Error description' }
+ * 
+ * The session persists across multiple messages, so the agent 
+ * remembers conversation history.
+ */
+app.post('/api/chat/stream', async (req, res) => {
+  const { userId, sessionId, message } = req.body;
+
+  // Validate inputs
+  if (!userId || !sessionId || !message) {
+    return res.status(400).json({ 
+      error: 'Missing userId, sessionId, or message' 
+    });
+  }
+
+  // Set SSE headers
+  // This tells the browser: "I'm streaming events, keep the connection open"
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+
+  try {
+    // Create the session if it doesn't exist.
+    // NOTE: getSession returns null (not throws) for missing sessions,
+    // so we check the return value rather than catching an error.
+    const existing = await runner.sessionService.getSession({
+      appName: 'jigger_ai',
+      userId,
+      sessionId,
+    });
+    if (!existing) {
+      await runner.sessionService.createSession({
+        appName: 'jigger_ai',
+        userId,
+        sessionId,
+      });
+    }
+
+    // Run the agent and stream events
+    const events = runner.runAsync({
+      sessionId,
+      userId,
+      newMessage: { role: 'user', parts: [{ text: message }] },
+    });
+
+    // Stream each event to the client
+    let gotRealResponse = false;
+    let got429 = false;
+
+    for await (const event of events) {
+      // Handle API errors (e.g., 429 rate limit) surfaced as event fields
+      if ((event as any).errorCode) {
+        if (String((event as any).errorCode) === '429') {
+          got429 = true;
+        } else {
+          res.write(`data: ${JSON.stringify({
+            type: 'error',
+            message: String((event as any).errorMessage || `API error ${(event as any).errorCode}`),
+          })}\n\n`);
+        }
+        continue;
+      }
+
+      if (event.content?.parts) {
+        for (const part of event.content.parts) {
+          if (part.text) {
+            gotRealResponse = true;
+            res.write(`data: ${JSON.stringify({
+              type: 'token',
+              text: part.text,
+              agent: event.author,
+            })}\n\n`);
+          }
+        }
+      }
+    }
+
+    // DEV FALLBACK: If we hit a rate limit and got no real response,
+    // stream a realistic mock response so the full pipeline can be tested.
+    if (got429 && !gotRealResponse) {
+      const mockText = getMockMixologistResponse(message);
+      // Stream word-by-word to simulate real typing
+      const words = mockText.split(' ');
+      for (const word of words) {
+        res.write(`data: ${JSON.stringify({
+          type: 'token',
+          text: word + ' ',
+          agent: 'Mixologist',
+        })}\n\n`);
+        await new Promise<void>(r => setTimeout(r, 25));
+      }
+    }
+
+    // Signal successful completion
+    res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+  } catch (error) {
+    // Stream error to client
+    res.write(`data: ${JSON.stringify({ 
+      type: 'error', 
+      message: String(error) 
+    })}\n\n`);
+  }
+
+  res.end();
+});
+
+// Test endpoint - simplified for debugging
+app.post('/api/test-simple', async (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+
+  try {
+    res.write(`data: ${JSON.stringify({ type: 'debug', msg: 'Creating session' })}\n\n`);
+    const sessionId = 'test-' + Date.now();
+    const session = await runner.sessionService.createSession({
+      appName: 'jigger_ai',
+      userId: 'test-user',
+      sessionId,
+    });
+    res.write(`data: ${JSON.stringify({ type: 'debug', msg: 'Session created: ' + session?.id })}\n\n`);
+
+    res.write(`data: ${JSON.stringify({ type: 'debug', msg: 'Running agent' })}\n\n`);
+    const events = runner.runAsync({
+      sessionId: session?.id || sessionId,
+      userId: 'test-user',
+      newMessage: { role: 'user', parts: [{ text: 'Hello' }] },
+    });
+
+    let count = 0;
+    for await (const event of events) {
+      count++;
+      const eventKeys = JSON.stringify(Object.keys(event)).substring(0, 200);
+      res.write(`data: ${JSON.stringify({ type: 'debug', msg: 'Event #' + count + ' keys: ' + eventKeys })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'debug', msg: 'Full event: ' + JSON.stringify(event).substring(0, 400) })}\n\n`);
+      
+      if (event.content?.parts) {
+        res.write(`data: ${JSON.stringify({ type: 'debug', msg: 'Parts count: ' + event.content.parts.length })}\n\n`);
+        for (const [i, part] of event.content.parts.entries()) {
+          if (part.text) {
+            res.write(`data: ${JSON.stringify({ type: 'token', text: part.text })}\n\n`);
+          }
+        }
+      }
+    }
+    res.write(`data: ${JSON.stringify({ type: 'debug', msg: 'Total events: ' + count })}\n\n`);
+    res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+  } catch (e: any) {
+    res.write(`data: ${JSON.stringify({ type: 'error', message: e.message + ' | ' + e.stack?.substring(0, 200) })}\n\n`);
+  }
+  res.end();
 });

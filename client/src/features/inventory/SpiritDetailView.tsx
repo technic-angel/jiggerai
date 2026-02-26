@@ -7,8 +7,10 @@ import { VolumeBar } from "@/components/ui/volume-bar";
 import { useUIStore } from "@/store/uiStore";
 import { getSpiritDetail } from "./spiritDetailSeed";
 import type { SpiritDetail, WhereToBuy, CommonCocktail } from "./spiritDetailSeed";
-import { SEED_INVENTORY } from "./inventorySeed";
-import { SEED_RECIPES } from "../recipes/recipeSeed";
+import { useBottle, usePatchBottle } from "@/hooks/useInventory";
+import { useRecipes } from "@/hooks/useRecipes";
+import type { Bottle } from "@/types";
+import { StarRating } from "@/components/ui/StarRating";
 
 // ─── Where-to-Buy card ───────────────────────────────────────────────────────
 
@@ -81,8 +83,7 @@ function CocktailChip({ cocktail, onNavigate }: { cocktail: CommonCocktail; onNa
 
 // ─── FALLBACK when detail seed doesn't cover this bottle ────────────────────
 
-function buildFallbackDetail(id: number): SpiritDetail {
-  const bottle = SEED_INVENTORY.find((b) => b.id === id);
+function buildFallbackDetail(id: number, bottle?: Bottle): SpiritDetail {
   return {
     id,
     spiritName: bottle?.spiritName ?? "Unknown Spirit",
@@ -115,51 +116,83 @@ export function SpiritDetailView() {
   const clearPageContext = useUIStore((s) => s.clearPageContext);
 
   const bottleId = Number(id);
-  const bottle = SEED_INVENTORY.find((b) => b.id === bottleId);
-  const detail = getSpiritDetail(bottleId) ?? buildFallbackDetail(bottleId);
+  const { data: bottle, isLoading: bottleLoading, isError: bottleError } = useBottle(bottleId);
+  const { data: recipes = [] } = useRecipes();
+  const patchBottle = usePatchBottle(bottleId);
 
-  // ── Volume controls (local state; Phase B: PATCH /api/inventory/:id) ────────
-  const [volumeEighths, setVolumeEighths] = useState(bottle?.volumeEighths ?? 0);
-  const [unopenedCount, setUnopenedCount] = useState(bottle?.unopenedCount ?? 0);
+  const detail = getSpiritDetail(bottleId) ?? buildFallbackDetail(bottleId, bottle);
+
+  // ── Volume controls (local optimistic state; persisted via PATCH /api/inventory/:id) ──
+  const [volumeEighths, setVolumeEighths] = useState(0);
+  const [unopenedCount, setUnopenedCount] = useState(0);
+
+  // Sync local state when bottle data arrives
+  useEffect(() => {
+    if (bottle) {
+      setVolumeEighths(bottle.volumeEighths);
+      setUnopenedCount(bottle.unopenedCount);
+    }
+  }, [bottle?.id, bottle?.volumeEighths, bottle?.unopenedCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function subtract() {
     if (volumeEighths > 0) {
-      setVolumeEighths((v) => v - 1);
+      const next = volumeEighths - 1;
+      setVolumeEighths(next);
+      patchBottle.mutate({ volumeEighths: next });
     } else if (unopenedCount > 0) {
-      // Auto-open the next bottle
-      setUnopenedCount((c) => c - 1);
+      const nextCount = unopenedCount - 1;
+      setUnopenedCount(nextCount);
       setVolumeEighths(8);
+      patchBottle.mutate({ volumeEighths: 8, unopenedCount: nextCount });
     }
   }
 
   function add() {
-    if (volumeEighths < 8) setVolumeEighths((v) => v + 1);
+    if (volumeEighths < 8) {
+      const next = volumeEighths + 1;
+      setVolumeEighths(next);
+      patchBottle.mutate({ volumeEighths: next });
+    }
   }
 
   function addUnopened() {
-    setUnopenedCount((c) => c + 1);
+    const next = unopenedCount + 1;
+    setUnopenedCount(next);
+    patchBottle.mutate({ unopenedCount: next });
   }
 
   function removeCurrentBottle() {
     if (volumeEighths > 0) {
       setVolumeEighths(0);
+      patchBottle.mutate({ volumeEighths: 0 });
     } else if (unopenedCount > 0) {
-      setUnopenedCount((c) => c - 1);
+      const next = unopenedCount - 1;
+      setUnopenedCount(next);
+      patchBottle.mutate({ unopenedCount: next });
     }
   }
 
   // ── Set page context so chat agent knows what's on screen ──────────────────
   useEffect(() => {
+    if (!bottle) return;
     setPageContext({
       type: "spirit",
       id: bottleId,
       name: detail.spiritName,
-      summary: `${detail.spiritName} — ${detail.subtitle}. Category: ${detail.category}. ABV: ${detail.abv}. Origin: ${detail.origin}. Flavor: ${detail.flavorProfile}. User currently has ${bottle?.volumeEighths ?? 0}/8 remaining.`,
+      summary: `${detail.spiritName} — ${detail.subtitle}. Category: ${detail.category}. ABV: ${detail.abv}. Origin: ${detail.origin}. Flavor: ${detail.flavorProfile}. User currently has ${bottle.volumeEighths}/8 remaining.`,
     });
     return () => clearPageContext();
-  }, [bottleId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [bottleId, bottle?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!bottle) {
+  if (bottleLoading) {
+    return (
+      <div className="flex items-center justify-center py-24 text-muted-foreground">
+        <span className="text-sm">Loading…</span>
+      </div>
+    );
+  }
+
+  if (bottleError || !bottle) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
         <span className="text-4xl">🔍</span>
@@ -213,6 +246,17 @@ export function SpiritDetailView() {
               <div>
                 <h1 className="text-3xl font-bold text-foreground">{detail.spiritName}</h1>
                 <p className="mt-1 text-base text-muted-foreground">{detail.subtitle}</p>
+              </div>
+
+              {/* Star rating */}
+              <div className="flex items-center gap-2">
+                <StarRating
+                  value={bottle.rating ?? null}
+                  onChange={(r) => patchBottle.mutate({ rating: r })}
+                />
+                {bottle.rating && (
+                  <span className="text-xs text-muted-foreground">{bottle.rating}/5</span>
+                )}
               </div>
 
               <div className="flex flex-col gap-2">
@@ -309,7 +353,7 @@ export function SpiritDetailView() {
               <h2 className="mb-3 text-base font-semibold text-foreground">Common Cocktails</h2>
               <div className="flex flex-wrap gap-2">
                 {detail.commonCocktails.map((c) => {
-                  const matched = SEED_RECIPES.find(
+                  const matched = recipes.find(
                     (r) => r.name.toLowerCase() === c.name.toLowerCase()
                   );
                   return (

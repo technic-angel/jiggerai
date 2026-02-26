@@ -4,11 +4,12 @@ import type { ChatMessage } from "@/types";
 interface ChatState {
   messages: ChatMessage[];
   isStreaming: boolean;
-  currentAgentName: string;
+  currentAgentName: string | null;
 
   addMessage: (msg: ChatMessage) => void;
   appendTokenToLastMessage: (token: string) => void;
-  setCurrentAgent: (name: string) => void;
+  markLastMessageDone: () => void;
+  setCurrentAgent: (name: string | null) => void;
   setStreaming: (v: boolean) => void;
   clearMessages: () => void;
 }
@@ -16,22 +17,22 @@ interface ChatState {
 export const useChatStore = create<ChatState>((set) => ({
   messages: [
     {
-      id: "mock-1",
-      role: "user",
-      content: "What can I make with gin and lime?",
-      timestamp: new Date(),
-    },
-    {
-      id: "mock-2",
+      id: "welcome",
       role: "assistant",
       content:
-        "**Gimlet**\n\nPresence: a classic cocktail recipe that uses gin and lime.\n\n**Ingredients:**\n- 1 oz gimlet\n- 1 oz gin and limes\n- 1 tsp potter\n- 1 cup softness with lime\n\n**Instructions:**\n1. Add gin and lime juice to a shaker with ice\n2. Shake until well-chilled\n3. Strain into a coupe glass\n4. Garnish with a lime wheel\n\nhttps://www.youtube.com/watch?v=GinGimlet",
+        "👋 Hey there! I'm **Mixologist**, your personal cocktail guide.\n\nAsk me anything — from classic recipes to what to make with what's in your bar. What are you in the mood for?",
       timestamp: new Date(),
-      agentName: "Mixologist Agent",
+      agentName: "Mixologist",
+      suggestions: [
+        "🍸 What can I make with vodka?",
+        "🥃 Recommend a whiskey cocktail",
+        "🍹 Surprise me with something tropical",
+        "🍋 What goes well with gin and citrus?",
+      ],
     },
   ],
   isStreaming: false,
-  currentAgentName: "Mixologist Agent",
+  currentAgentName: null,
 
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
 
@@ -41,6 +42,16 @@ export const useChatStore = create<ChatState>((set) => ({
       const last = msgs[msgs.length - 1];
       if (last && last.role === "assistant") {
         msgs[msgs.length - 1] = { ...last, content: last.content + token };
+      }
+      return { messages: msgs };
+    }),
+
+  markLastMessageDone: () =>
+    set((s) => {
+      const msgs = [...s.messages];
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === "assistant") {
+        msgs[msgs.length - 1] = { ...last, isStreaming: false };
       }
       return { messages: msgs };
     }),
