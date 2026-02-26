@@ -76,6 +76,8 @@ export interface ChatMessage {
   timestamp: Date;
   isStreaming?: boolean;
   agentName?: string;
+  /** Clickable suggestion chips shown below the message */
+  suggestions?: string[];
 }
 
 // ─── Layout ──────────────────────────────────────────

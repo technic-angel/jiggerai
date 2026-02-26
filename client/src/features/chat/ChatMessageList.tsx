@@ -5,9 +5,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface ChatMessageListProps {
   messages: ChatMessageType[];
+  onSuggestionClick?: (text: string) => void;
 }
 
-export function ChatMessageList({ messages }: ChatMessageListProps) {
+export function ChatMessageList({ messages, onSuggestionClick }: ChatMessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when messages change
@@ -16,10 +17,14 @@ export function ChatMessageList({ messages }: ChatMessageListProps) {
   }, [messages]);
 
   return (
-    <ScrollArea className="flex-1">
-      <div className="flex flex-col gap-4 p-4">
+    <ScrollArea className="flex-1 bg-gradient-to-b from-zinc-900/50 to-zinc-950/80">
+      <div className="flex flex-col gap-4 px-3 py-4">
         {messages.map((msg) => (
-          <ChatMessage key={msg.id} message={msg} />
+          <ChatMessage
+            key={msg.id}
+            message={msg}
+            onSuggestionClick={onSuggestionClick}
+          />
         ))}
         <div ref={bottomRef} />
       </div>
