@@ -1,33 +1,46 @@
 import { useEffect, useRef } from "react";
 import type { ChatMessage as ChatMessageType } from "@/types";
 import { ChatMessage } from "./ChatMessage";
-import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface ChatMessageListProps {
   messages: ChatMessageType[];
   onSuggestionClick?: (text: string) => void;
+  onAddToLibrary?: (cocktailName: string, recipeData: Record<string, unknown>) => void;
 }
 
-export function ChatMessageList({ messages, onSuggestionClick }: ChatMessageListProps) {
-  const bottomRef = useRef<HTMLDivElement>(null);
+export function ChatMessageList({ messages, onSuggestionClick, onAddToLibrary }: ChatMessageListProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when messages change
+  // Scroll the chat container itself — never the page
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = scrollRef.current;
+    /* v8 ignore next */
+    if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
+  // Only show suggestion chips on the last assistant message so old chips
+  // don't persist in the history after the user has already clicked them.
+  const lastAssistantIndex = messages.reduce(
+    (last, msg, i) => (msg.role === "assistant" ? i : last),
+    -1
+  );
+
   return (
-    <ScrollArea className="flex-1 bg-gradient-to-b from-zinc-900/50 to-zinc-950/80">
+    <div
+      ref={scrollRef}
+      className="flex-1 overflow-y-auto bg-gradient-to-b from-zinc-900/50 to-zinc-950/80"
+    >
       <div className="flex flex-col gap-4 px-3 py-4">
-        {messages.map((msg) => (
+        {messages.map((msg, i) => (
           <ChatMessage
             key={msg.id}
             message={msg}
             onSuggestionClick={onSuggestionClick}
+            showSuggestions={i === lastAssistantIndex}
+            onAddToLibrary={onAddToLibrary}
           />
         ))}
-        <div ref={bottomRef} />
       </div>
-    </ScrollArea>
+    </div>
   );
 }

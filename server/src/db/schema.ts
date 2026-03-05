@@ -118,6 +118,9 @@ export const recipes = pgTable(
 
     // User's personal 1-5 star rating for this cocktail (null = unrated)
     rating: integer('rating'),
+
+    // Bar tools/equipment needed (e.g. ["🫗 Cocktail Shaker", "🪤 Hawthorne Strainer"])
+    equipment: text('equipment').array(),
   },
   (table) => [
     index('recipeEmbeddingIndex').using('hnsw', table.embedding.op('vector_cosine_ops')),

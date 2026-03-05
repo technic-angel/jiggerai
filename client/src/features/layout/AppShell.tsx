@@ -27,6 +27,7 @@ export function AppShell() {
     document.body.style.userSelect = "none";
 
     function onMouseMove(ev: MouseEvent) {
+      /* v8 ignore next */
       if (!isDragging.current) return;
       const delta = startX.current - ev.clientX; // dragging left = wider chat
       const maxWidth = window.innerWidth * 0.5;

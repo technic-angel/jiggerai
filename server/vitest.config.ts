@@ -7,7 +7,14 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
-      include: ['src/app.ts'],
+      include: [
+        'src/app.ts',
+        'src/agents/orchestrator.ts',
+        'src/agents/subagents.ts',
+        'src/agents/memory.ts',
+        'src/agents/providers.ts',
+        'src/agents/tools/**',
+      ],
       thresholds: {
         lines: 100,
         functions: 100,
