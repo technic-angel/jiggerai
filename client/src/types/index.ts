@@ -36,6 +36,7 @@ export interface Recipe {
   difficulty: string | null;
   imageEmoji: string | null;
   rating: number | null; // 1-5 stars, null = unrated
+  equipment: string[] | null; // Bar tools needed, e.g. ["🫗 Cocktail Shaker"]
   /** Derived client-side: true when recipe ID is in the user's favorites list */
   isFavorite?: boolean;
   /** Derived client-side: true when user has all required ingredients */
@@ -69,6 +70,16 @@ export interface FullRecipe extends Recipe {
 }
 
 // ─── Chat ────────────────────────────────────────────
+
+export interface WhereToBuyResult {
+  store: string;
+  priceRange: string;
+  deliveryNote: string;
+  url: string;
+  logo: string;
+  type: 'online' | 'local' | 'search';
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -78,6 +89,12 @@ export interface ChatMessage {
   agentName?: string;
   /** Clickable suggestion chips shown below the message */
   suggestions?: string[];
+  /** YouTube video cards streamed from tool results */
+  youtubeVideos?: { videoId: string; title: string; thumbnail: string }[];
+  /** "Add to Library" action buttons streamed from tool results */
+  addButtons?: { cocktailName: string; recipeData: Record<string, unknown> }[];
+  /** Where-to-buy retailer cards streamed from tool results */
+  whereToBuyCards?: { ingredientName: string; results: WhereToBuyResult[] };
 }
 
 // ─── Layout ──────────────────────────────────────────

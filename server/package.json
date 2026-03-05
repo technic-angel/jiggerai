@@ -6,6 +6,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
+    "mcp": "tsx src/mcp-server.ts",
     "link-ingredients": "tsx src/db/link_inventory_to_ingredients.ts",
     "lint": "eslint .",
     "seed": "tsx src/db/seed-runner.ts",
@@ -18,14 +19,19 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@google/adk": "^0.3.0",
+    "@ai-sdk/google": "^3.0.33",
+    "@ai-sdk/groq": "^3.0.25",
+    "@ai-sdk/xai": "^3.0.59",
+    "@google/adk": "^0.4.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "ai": "^6.0.103",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
-    "zod": "^3.22.2",
     "drizzle-orm": "^0.45.1",
     "express": "^5.2.1",
     "pg": "^8.18.0",
-    "uuid": "^13.0.0"
+    "uuid": "^13.0.0",
+    "zod": "^3.22.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -33,17 +39,17 @@
     "@types/express": "^5.0.6",
     "@types/node": "^25.3.0",
     "@types/pg": "^8.16.0",
+    "@types/supertest": "^6.0.0",
     "@types/uuid": "^10.0.0",
+    "@vitest/coverage-v8": "^1.5.9",
     "drizzle-kit": "^0.31.9",
     "eslint": "^10.0.1",
     "globals": "^17.3.0",
-    "tsx": "^4.21.0",
-    "vitest": "^1.5.9",
-    "@vitest/coverage-v8": "^1.5.9",
     "supertest": "^7.0.0",
-    "@types/supertest": "^6.0.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.56.0"
+    "typescript-eslint": "^8.56.0",
+    "vitest": "^1.5.9"
   },
   "overrides": {
     "rimraf": "^6.0.0"

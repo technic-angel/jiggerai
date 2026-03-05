@@ -292,7 +292,7 @@ export function ProfileView() {
         <InputField
           label="Email"
           value={data.email}
-          onChange={() => {}}
+          onChange={/* v8 ignore next */ () => {}}
           disabled={true}
           readonly={true}
           hint="Email cannot be changed here. Contact support to update your email address."

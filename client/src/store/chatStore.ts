@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ChatMessage } from "@/types";
+import type { ChatMessage, WhereToBuyResult } from "@/types";
 
 interface ChatState {
   messages: ChatMessage[];
@@ -8,6 +8,9 @@ interface ChatState {
 
   addMessage: (msg: ChatMessage) => void;
   appendTokenToLastMessage: (token: string) => void;
+  appendYoutubeToLastMessage: (video: NonNullable<ChatMessage['youtubeVideos']>[number]) => void;
+  appendAddButtonToLastMessage: (btn: NonNullable<ChatMessage['addButtons']>[number]) => void;
+  appendWhereToBuyToLastMessage: (ingredientName: string, results: WhereToBuyResult[]) => void;
   markLastMessageDone: () => void;
   setCurrentAgent: (name: string | null) => void;
   setStreaming: (v: boolean) => void;
@@ -42,6 +45,48 @@ export const useChatStore = create<ChatState>((set) => ({
       const last = msgs[msgs.length - 1];
       if (last && last.role === "assistant") {
         msgs[msgs.length - 1] = { ...last, content: last.content + token };
+      }
+      return { messages: msgs };
+    }),
+
+  appendYoutubeToLastMessage: (video) =>
+    set((s) => {
+      const msgs = [...s.messages];
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === "assistant") {
+        const existing = last.youtubeVideos ?? [];
+        // Deduplicate by videoId
+        if (existing.some((v) => v.videoId === video.videoId)) return s;
+        msgs[msgs.length - 1] = {
+          ...last,
+          youtubeVideos: [...existing, video],
+        };
+      }
+      return { messages: msgs };
+    }),
+
+  appendAddButtonToLastMessage: (btn) =>
+    set((s) => {
+      const msgs = [...s.messages];
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === "assistant") {
+        // Deduplicate by cocktailName
+        const existing = last.addButtons ?? [];
+        if (existing.some((b) => b.cocktailName === btn.cocktailName)) return s;
+        msgs[msgs.length - 1] = {
+          ...last,
+          addButtons: [...existing, btn],
+        };
+      }
+      return { messages: msgs };
+    }),
+
+  appendWhereToBuyToLastMessage: (ingredientName, results) =>
+    set((s) => {
+      const msgs = [...s.messages];
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === "assistant") {
+        msgs[msgs.length - 1] = { ...last, whereToBuyCards: { ingredientName, results } };
       }
       return { messages: msgs };
     }),

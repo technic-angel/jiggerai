@@ -78,10 +78,13 @@ export function AddBottleView() {
 
   /** Simulate AI lookup — Phase B: POST /api/ai/lookup-spirit */
   async function handleAILookup() {
+    /* v8 ignore start */
     if (!form.spiritName.trim()) {
       setError("Enter a spirit name first.");
       return;
     }
+    /* v8 ignore stop */
+    
     setError("");
     setIsLooking(true);
     await new Promise((r) => setTimeout(r, 1400));

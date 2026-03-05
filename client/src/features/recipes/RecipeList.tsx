@@ -33,10 +33,16 @@ function RecipeRow({ recipe, onClick }: RecipeRowProps) {
       onClick={() => onClick(recipe)}
       className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-muted/30 transition-colors cursor-pointer"
     >
-      {/* Spirit emoji */}
-      <span className="w-7 text-center text-lg leading-none shrink-0">
-        {(recipe.baseSpirit ? SPIRIT_EMOJI[recipe.baseSpirit] : null) ?? "🍹"}
-      </span>
+      {/* Thumbnail or spirit emoji */}
+      {recipe.imageUrl ? (
+        <div className="h-9 w-9 shrink-0 overflow-hidden rounded-md border border-border/60">
+          <img src={recipe.imageUrl} alt="" className="h-full w-full object-cover" />
+        </div>
+      ) : (
+        <span className="w-7 text-center text-lg leading-none shrink-0">
+          {(recipe.baseSpirit ? SPIRIT_EMOJI[recipe.baseSpirit] : null) ?? "🍹"}
+        </span>
+      )}
 
       {/* Name + category */}
       <div className="flex flex-1 items-baseline gap-2 min-w-0">

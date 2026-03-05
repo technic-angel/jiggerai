@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "jigger-ai": {
+      "type": "stdio",
+      "command": "npm",
+      "args": ["run", "mcp"],
+      "cwd": "/Users/melissa/jigger-ai/server",
+      "env": {}
+    }
+  }
+}

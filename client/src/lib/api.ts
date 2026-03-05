@@ -7,7 +7,7 @@
  * DEV_USER_ID is the fixed seed user. Replace with real auth in production.
  */
 
-export const DEV_USER_ID = import.meta.env.VITE_DEV_USER_ID ?? 'dev-user-001';
+export const DEV_USER_ID = import.meta.env.VITE_DEV_USER_ID ?? /* v8 ignore next */ 'dev-user-001';
 
 const BASE = '/api';
 

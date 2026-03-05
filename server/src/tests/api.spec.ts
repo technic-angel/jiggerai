@@ -49,6 +49,12 @@ vi.mock('../db/schema.js', () => ({
   recipeVariants: { id: 'id', baseRecipeId: 'baseRecipeId' },
 }));
 
+// Mock the orchestrator for chat streaming tests
+const mockRunAgent = vi.fn();
+vi.mock('../agents/orchestrator.js', () => ({
+  runAgent: (...args: unknown[]) => mockRunAgent(...args),
+}));
+
 // ---------------------------------------------------------------------------
 // Import app + mocked db AFTER vi.mock declarations
 // ---------------------------------------------------------------------------
@@ -1447,5 +1453,265 @@ describe('PATCH /api/inventory/:id rating', () => {
     const res = await request(app).patch('/api/inventory/1').send({ rating: 6 });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/validation/i);
+  });
+});
+
+// ===========================================================================
+// Helper: parse SSE response text into data objects
+// ===========================================================================
+function parseSSE(text: string): unknown[] {
+  return text
+    .split('\n')
+    .filter((l) => l.startsWith('data: '))
+    .map((l) => {
+      try { return JSON.parse(l.slice(6)); } catch { return l.slice(6); }
+    });
+}
+
+// Helper: create an async iterable from an array of events
+function asyncIter<T>(items: T[]): AsyncIterable<T> {
+  return {
+    [Symbol.asyncIterator]() {
+      let i = 0;
+      return {
+        async next() {
+          if (i < items.length) return { value: items[i++], done: false };
+          return { value: undefined as unknown as T, done: true };
+        },
+      };
+    },
+  };
+}
+
+// Helper: create an async iterable that throws on first next()
+function asyncIterThrow(err: Error): AsyncIterable<never> {
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        async next(): Promise<IteratorResult<never>> {
+          throw err;
+        },
+      };
+    },
+  };
+}
+
+// ===========================================================================
+// POST /api/chat/stream
+// ===========================================================================
+describe('POST /api/chat/stream', () => {
+  it('400 – missing userId', async () => {
+    const res = await request(app)
+      .post('/api/chat/stream')
+      .send({ sessionId: 's1', message: 'hi' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/missing/i);
+  });
+
+  it('400 – missing sessionId', async () => {
+    const res = await request(app)
+      .post('/api/chat/stream')
+      .send({ userId: 'u1', message: 'hi' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/missing/i);
+  });
+
+  it('400 – missing message', async () => {
+    const res = await request(app)
+      .post('/api/chat/stream')
+      .send({ userId: 'u1', sessionId: 's1' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/missing/i);
+  });
+
+  it('200 – streams token events from runAgent', async () => {
+    mockRunAgent.mockReturnValueOnce(
+      asyncIter([
+        { type: 'token', text: 'Hello ', agent: 'Mixologist' },
+        { type: 'token', text: 'there!', agent: 'Mixologist' },
+        { type: 'done' },
+      ]),
+    );
+
+    const res = await request(app)
+      .post('/api/chat/stream')
+      .send({ userId: 'u1', sessionId: 's1', message: 'hi' })
+      .buffer(true)
+      .parse((res, cb) => {
+        let data = '';
+        res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+        res.on('end', () => cb(null, data));
+      });
+
+    expect(res.status).toBe(200);
+    const events = parseSSE(res.body as string);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'token', text: 'Hello ' }),
+        expect.objectContaining({ type: 'token', text: 'there!' }),
+        expect.objectContaining({ type: 'done' }),
+      ]),
+    );
+  });
+
+  it('200 – passes pageContext to runAgent', async () => {
+    mockRunAgent.mockReturnValueOnce(asyncIter([{ type: 'done' }]));
+
+    await request(app)
+      .post('/api/chat/stream')
+      .send({ userId: 'u1', sessionId: 's1', message: 'hi', pageContext: { page: 'inventory' } });
+
+    expect(mockRunAgent).toHaveBeenCalledWith('u1', 's1', 'hi', { page: 'inventory' });
+  });
+
+  it('200 – sends undefined pageContext when absent', async () => {
+    mockRunAgent.mockReturnValueOnce(asyncIter([{ type: 'done' }]));
+
+    await request(app)
+      .post('/api/chat/stream')
+      .send({ userId: 'u1', sessionId: 's1', message: 'hi' });
+
+    expect(mockRunAgent).toHaveBeenCalledWith('u1', 's1', 'hi', undefined);
+  });
+
+  it('200 – streams error event on exception', async () => {
+    mockRunAgent.mockReturnValueOnce(asyncIterThrow(new Error('AI exploded')));
+
+    const res = await request(app)
+      .post('/api/chat/stream')
+      .send({ userId: 'u1', sessionId: 's1', message: 'hi' })
+      .buffer(true)
+      .parse((res, cb) => {
+        let data = '';
+        res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+        res.on('end', () => cb(null, data));
+      });
+
+    const events = parseSSE(res.body as string);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'error', message: expect.stringContaining('AI exploded') }),
+      ]),
+    );
+  });
+
+  it('200 – streams tool-call events', async () => {
+    mockRunAgent.mockReturnValueOnce(
+      asyncIter([
+        { type: 'tool-call', toolName: 'getUserInventory', args: { userId: 'u1' } },
+        { type: 'token', text: 'You have 3 bottles.', agent: 'Inventory' },
+        { type: 'done' },
+      ]),
+    );
+
+    const res = await request(app)
+      .post('/api/chat/stream')
+      .send({ userId: 'u1', sessionId: 's1', message: 'what do I have?' })
+      .buffer(true)
+      .parse((res, cb) => {
+        let data = '';
+        res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+        res.on('end', () => cb(null, data));
+      });
+
+    const events = parseSSE(res.body as string);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'tool-call', toolName: 'getUserInventory' }),
+        expect.objectContaining({ type: 'token', text: 'You have 3 bottles.' }),
+        expect.objectContaining({ type: 'done' }),
+      ]),
+    );
+  });
+
+  it('200 – streams error events from agent (non-exception)', async () => {
+    mockRunAgent.mockReturnValueOnce(
+      asyncIter([
+        { type: 'error', message: 'Rate limited' },
+        { type: 'done' },
+      ]),
+    );
+
+    const res = await request(app)
+      .post('/api/chat/stream')
+      .send({ userId: 'u1', sessionId: 's1', message: 'hi' })
+      .buffer(true)
+      .parse((res, cb) => {
+        let data = '';
+        res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+        res.on('end', () => cb(null, data));
+      });
+
+    const events = parseSSE(res.body as string);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'error', message: 'Rate limited' }),
+        expect.objectContaining({ type: 'done' }),
+      ]),
+    );
+  });
+});
+
+// ===========================================================================
+// POST /api/test-simple
+// ===========================================================================
+describe('POST /api/test-simple', () => {
+  it('200 – streams events from runAgent', async () => {
+    mockRunAgent.mockReturnValueOnce(
+      asyncIter([
+        { type: 'token', text: 'OK', agent: 'Mixologist' },
+        { type: 'done' },
+      ]),
+    );
+
+    const res = await request(app)
+      .post('/api/test-simple')
+      .buffer(true)
+      .parse((res, cb) => {
+        let data = '';
+        res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+        res.on('end', () => cb(null, data));
+      });
+
+    expect(res.status).toBe(200);
+    const events = parseSSE(res.body as string);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'token', text: 'OK' }),
+        expect.objectContaining({ type: 'done' }),
+      ]),
+    );
+  });
+
+  it('200 – streams error event on exception', async () => {
+    mockRunAgent.mockReturnValueOnce(asyncIterThrow(new Error('Provider down')));
+
+    const res = await request(app)
+      .post('/api/test-simple')
+      .buffer(true)
+      .parse((res, cb) => {
+        let data = '';
+        res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+        res.on('end', () => cb(null, data));
+      });
+
+    const events = parseSSE(res.body as string);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'error', message: expect.stringContaining('Provider down') }),
+      ]),
+    );
+  });
+
+  it('200 – calls runAgent with test-user params', async () => {
+    mockRunAgent.mockReturnValueOnce(asyncIter([{ type: 'done' }]));
+
+    await request(app).post('/api/test-simple');
+
+    expect(mockRunAgent).toHaveBeenCalledWith(
+      'test-user',
+      expect.stringMatching(/^test-\d+$/),
+      'Say exactly: OK',
+    );
   });
 });

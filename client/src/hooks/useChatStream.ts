@@ -1,5 +1,6 @@
 import { useCallback, useRef } from 'react';
 import { useChatStore } from '../store/chatStore';
+import { useUIStore } from '../store/uiStore';
 
 // Dev user ID (replace with real auth later)
 const DEV_USER_ID = 'dev-user-001';
@@ -31,10 +32,17 @@ export function useChatStream() {
   const {
     addMessage,
     appendTokenToLastMessage,
+    appendYoutubeToLastMessage,
+    appendAddButtonToLastMessage,
+    appendWhereToBuyToLastMessage,
     markLastMessageDone,
     setStreaming,
     setCurrentAgent,
   } = useChatStore();
+
+  const pageContext = useUIStore((s) => s.pageContext);
+  const setWhereToBuyResults = useUIStore((s) => s.setWhereToBuyResults);
+  const setRecipeYouTubeOverride = useUIStore((s) => s.setRecipeYouTubeOverride);
 
   /**
    * sendMessage — Main function to send a message and stream response
@@ -85,6 +93,7 @@ export function useChatStream() {
             userId: DEV_USER_ID,
             sessionId,
             message: text,
+            pageContext: pageContext.type ? pageContext : undefined,
           }),
           signal: abortRef.current.signal,
         });
@@ -126,6 +135,33 @@ export function useChatStream() {
                 if (payload.agent) {
                   setCurrentAgent(payload.agent);
                 }
+              } else if (payload.type === 'youtube') {
+                // Attach YouTube video card to the current assistant message
+                appendYoutubeToLastMessage({
+                  videoId: payload.videoId,
+                  title: payload.title,
+                  thumbnail: payload.thumbnail,
+                });
+                // If currently viewing a recipe without a video, store the override
+                // so RecipeDetailView shows the embed immediately (before DB refetch)
+                if (pageContext.type === 'recipe' && pageContext.id) {
+                  setRecipeYouTubeOverride(pageContext.id, payload.videoId);
+                }
+              } else if (payload.type === 'where_to_buy') {
+                // Attach retailer cards to the chat message (shown inline regardless of page)
+                appendWhereToBuyToLastMessage(payload.ingredientName, payload.results);
+                // Also store in uiStore for SpiritDetailView if it happens to be mounted
+                setWhereToBuyResults(
+                  payload.ingredientName,
+                  payload.bottleId ?? null,
+                  payload.results,
+                );
+              } else if (payload.type === 'add_button') {
+                // Attach "Add to Library" button to the current assistant message
+                appendAddButtonToLastMessage({
+                  cocktailName: payload.cocktailName,
+                  recipeData: payload.recipeData,
+                });
               } else if (payload.type === 'done') {
                 // Stream finished
                 break;
@@ -154,7 +190,7 @@ export function useChatStream() {
         setCurrentAgent(null);
       }
     },
-    [addMessage, appendTokenToLastMessage, markLastMessageDone, setStreaming, setCurrentAgent]
+    [addMessage, appendTokenToLastMessage, appendYoutubeToLastMessage, appendAddButtonToLastMessage, appendWhereToBuyToLastMessage, markLastMessageDone, setStreaming, setCurrentAgent, pageContext, setWhereToBuyResults, setRecipeYouTubeOverride]
   );
 
   /**

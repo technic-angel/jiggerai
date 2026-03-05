@@ -1,16 +1,47 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, ExternalLink, Minus, Plus, ShoppingCart, Trash2 } from "lucide-react";
+import { ArrowLeft, ExternalLink, Minus, Plus, ShoppingCart, Trash2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { VolumeBar } from "@/components/ui/volume-bar";
 import { useUIStore } from "@/store/uiStore";
+import type { WhereToBuyResult } from "@/types";
 import { getSpiritDetail } from "./spiritDetailSeed";
 import type { SpiritDetail, WhereToBuy, CommonCocktail } from "./spiritDetailSeed";
 import { useBottle, usePatchBottle } from "@/hooks/useInventory";
 import { useRecipes } from "@/hooks/useRecipes";
 import type { Bottle } from "@/types";
 import { StarRating } from "@/components/ui/StarRating";
+
+// ─── AI Where-to-Buy card ───────────────────────────────────
+
+function AIBuyCard({ result }: { result: WhereToBuyResult }) {
+  return (
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-2xl">{result.logo}</span>
+          <div>
+            <p className="text-sm font-semibold text-foreground">{result.store}</p>
+            <p className="text-xs text-muted-foreground">{result.deliveryNote}</p>
+          </div>
+        </div>
+        <span className="text-xs font-medium text-teal-400">{result.priceRange}</span>
+      </div>
+      <Button
+        asChild
+        className="mt-3 w-full bg-teal-500 text-white hover:bg-teal-600"
+        size="sm"
+      >
+        <a href={result.url} target="_blank" rel="noopener noreferrer">
+          <ShoppingCart className="mr-2 h-3.5 w-3.5" />
+          {result.type === 'local' ? 'Find Near Me' : result.type === 'search' ? 'Compare Prices' : 'Buy Now'}
+          <ExternalLink className="ml-2 h-3 w-3 opacity-70" />
+        </a>
+      </Button>
+    </div>
+  );
+}
 
 // ─── Where-to-Buy card ───────────────────────────────────────────────────────
 
@@ -114,6 +145,8 @@ export function SpiritDetailView() {
   const navigate = useNavigate();
   const setPageContext = useUIStore((s) => s.setPageContext);
   const clearPageContext = useUIStore((s) => s.clearPageContext);
+  const openChatWithMessage = useUIStore((s) => s.openChatWithMessage);
+  const whereToBuyResults = useUIStore((s) => s.whereToBuyResults);
 
   const bottleId = Number(id);
   const { data: bottle, isLoading: bottleLoading, isError: bottleError } = useBottle(bottleId);
@@ -121,6 +154,13 @@ export function SpiritDetailView() {
   const patchBottle = usePatchBottle(bottleId);
 
   const detail = getSpiritDetail(bottleId) ?? buildFallbackDetail(bottleId, bottle);
+
+  // Look up AI-fetched results by spirit name or bottle ID
+  const aiResults = (
+    whereToBuyResults[detail.spiritName.toLowerCase()]?.results ??
+    (bottleId ? Object.values(whereToBuyResults).find((v) => v.bottleId === bottleId)?.results : null) ??
+    null
+  );
 
   // ── Volume controls (local optimistic state; persisted via PATCH /api/inventory/:id) ──
   const [volumeEighths, setVolumeEighths] = useState(0);
@@ -371,12 +411,40 @@ export function SpiritDetailView() {
 
         {/* ── RIGHT: Where to Buy ── */}
         <div className="flex flex-col gap-3">
-          <h2 className="text-base font-semibold text-foreground">Where to Buy</h2>
-          {detail.whereToBuy.map((store) => (
-            <BuyCard key={store.store} store={store} />
-          ))}
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-foreground">Where to Buy</h2>
+            {!aiResults && (
+              <button
+                onClick={() => openChatWithMessage(`Where can I buy ${detail.spiritName}? Find me online and local options.`)}
+                className="flex items-center gap-1 rounded-full border border-teal-400/30 bg-teal-500/10 px-2.5 py-1 text-xs text-teal-300 transition-all hover:bg-teal-500/20 hover:text-teal-200"
+              >
+                <Sparkles className="h-3 w-3" />
+                AI Search
+              </button>
+            )}
+          </div>
+
+          {/* AI-fetched results replace static seed when available */}
+          {aiResults ? (
+            <>
+              <div className="flex items-center gap-1.5 rounded-lg border border-teal-400/20 bg-teal-400/5 px-3 py-2">
+                <Sparkles className="h-3.5 w-3.5 text-teal-400" />
+                <span className="text-xs text-teal-300 font-medium">AI-found retailers for {detail.spiritName}</span>
+              </div>
+              {aiResults.map((result) => (
+                <AIBuyCard key={result.store} result={result} />
+              ))}
+            </>
+          ) : (
+            detail.whereToBuy.map((store) => (
+              <BuyCard key={store.store} store={store} />
+            ))
+          )}
+
           <p className="mt-1 text-center text-xs text-muted-foreground">
-            Ask the assistant: "Where else can I buy this?"
+            {aiResults
+              ? 'Ask the assistant for more options or spirits'
+              : 'Ask the assistant: "Where else can I buy this?"'}
           </p>
         </div>
       </div>

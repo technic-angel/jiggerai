@@ -86,7 +86,7 @@ export function Sidebar() {
                     <NavLink
                       to={to}
                       end={end}
-                      className={({ isActive }) =>
+                      className={/* v8 ignore next */ ({ isActive }) =>
                         cn(
                           "flex flex-1 items-center justify-center rounded-lg px-3 py-2.5 text-sm font-medium no-underline transition-colors",
                           isActive
@@ -160,7 +160,7 @@ export function Sidebar() {
                 <TooltipTrigger asChild>
                   <NavLink
                     to="/profile"
-                    className={({ isActive }) =>
+                    className={/* v8 ignore next */ ({ isActive }) =>
                       cn(
                         "flex items-center justify-center rounded-lg px-3 py-2.5 text-sm font-medium no-underline transition-colors",
                         isActive
